@@ -47,10 +47,10 @@ class KimiK3Block(nn.Module):
     def forward(
         self,
         history: DepthHistory,
-        mode="chunk",
+        mode: str = "chunk",
         cache: KDACache | MLACache | None = None,
-        use_cache=False,
-    ):
+        use_cache: bool = False,
+    ) -> tuple[DepthHistory, KDACache | MLACache | None]:
         """Run one layer; updates `history` in place; returns (history, attn_cache)."""
         if not self.attn_res.use_additive:
             history.start_layer(self.layer_idx, self.attn_res.block_size)

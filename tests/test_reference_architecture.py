@@ -52,12 +52,14 @@ def test_kda_uses_reference_gate_parameterization():
 
     assert layer.A_log.shape == (cfg.num_heads,)
     assert layer.dt_bias.shape == (cfg.num_heads * cfg.head_dim_k,)
-    assert torch.all((layer.A_log.exp() >= 1) & (layer.A_log.exp() <= 16))
+    # Kimi K3 (Eq. 5) initializes the per-head log-scale A_h = 0 (so exp(A_h) = 1).
+    assert torch.allclose(layer.A_log, torch.zeros_like(layer.A_log))
 
     x = torch.randn(2, 5, cfg.hidden_size)
     gate = layer._decay_gate(x)
     assert gate.dtype == torch.float32
-    assert torch.all(gate >= cfg.gate_lower_bound)
+    # K3 scaled-sigmoid decay: g = g_min * sigmoid(...) in (g_min, 0).
+    assert torch.all(gate > cfg.gate_lower_bound)
     assert torch.all(gate < 0)
 
 

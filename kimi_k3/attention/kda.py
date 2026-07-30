@@ -9,13 +9,15 @@ Per head h, the layer computes (paper notation):
 
     q_t, k_t = L2Norm(Swish(ShortConv(W_{q/k} x_t)))     in R^{d_k}
     v_t      =        Swish(ShortConv(W_v    x_t))       in R^{d_v}
-    alpha_t  = f(W_up_alpha W_down_alpha x_t)            in [0, 1]^{d_k}
+    alpha_t  = exp( g_min * Sigmoid(exp(A_h) * z_t) )    in [exp(g_min), 1]^{d_k}
     beta_t   = Sigmoid(W_beta x_t)                       in [0, 1]
-    o_t      = W_o [ Sigmoid(W_up_g W_down_g x_t)
+    o_t      = W_o [ Sigmoid(W_g x_t)                    (full-rank gate, K3 Eq. 6)
                      ⊙ RMSNorm( KDA(q_t, k_t, v_t, alpha_t, beta_t) ) ]
 
-where f is the GDN/Mamba-style log-space decay function
-    g = -exp(A_log) * softplus(a + dt_bias),   alpha = exp(g).
+where z_t = W_up_alpha W_down_alpha x_t + dt_bias are the per-channel decay logits.
+Kimi K3 (Eq. 5) uses the lower-bounded SCALED-SIGMOID decay g = g_min·Sigmoid(exp(A_h)·z),
+g_min = -5 — NOT the negative-softplus form of Kimi Linear (arXiv:2510.26692). Likewise
+K3 uses a full-rank output gate W_g (Eq. 6), where Kimi Linear used a low-rank one.
 
 Notes for studying:
   - alpha is PER-CHANNEL (one decay rate per d_k channel) — this is the
@@ -75,11 +77,10 @@ class KimiDeltaAttention(nn.Module):
 
         self.w_alpha_down = nn.Linear(d, r, bias=False)
         self.w_alpha_up = nn.Linear(r, H * d_k, bias=False)
-        self.A_log = nn.Parameter(torch.empty(H, dtype=torch.float32))
+        # Kimi K3 (Eq. 5) initializes the per-head log-scale A_h = 0 (so exp(A_h) = 1),
+        # unlike the Mamba S4D range init. dt_bias is the per-channel decay bias b_alpha.
+        self.A_log = nn.Parameter(torch.zeros(H, dtype=torch.float32))
         self.dt_bias = nn.Parameter(torch.zeros(H * d_k, dtype=torch.float32))
-        nn.init.uniform_(self.A_log, 1.0, 16.0)
-        with torch.no_grad():
-            self.A_log.log_()
 
         self.w_beta = nn.Linear(d, H, bias=False)
 
@@ -93,7 +94,12 @@ class KimiDeltaAttention(nn.Module):
 
         self.q_scale = d_k ** -0.5 if cfg.use_q_scale else 1.0
 
-    def _short_conv(self, x_flat, conv, conv_window):
+    def _short_conv(
+        self,
+        x_flat: torch.Tensor,
+        conv: nn.Conv1d,
+        conv_window: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Causal depthwise ShortConv + Swish on one q/k/v branch.
 
         Shapes:
@@ -123,16 +129,36 @@ class KimiDeltaAttention(nn.Module):
         return F.silu(y), new_window
 
     def _decay_gate(self, x: torch.Tensor) -> torch.Tensor:
-        """Return K3's safe log-space per-channel decay in ``[-5, 0)``."""
+        """Per-channel log-decay g = log(alpha) — Kimi K3's lower-bounded scaled sigmoid.
+
+        Kimi K3 (report arXiv:2607.24653, Eq. 5) DELIBERATELY REPLACES Kimi Linear's
+        negative-softplus decay with a sigmoid bounded from below:
+
+            z = W_up_alpha W_down_alpha x + dt_bias       (per-channel decay logits)
+            g = g_min * Sigmoid(exp(A_h) * z)  in (g_min, 0)^{d_k}
+            alpha = exp(g)                     in (exp(g_min), 1)^{d_k}
+
+        g_min = gate_lower_bound = -5 (fixed); A_h is a learnable per-head log-scale
+        (init 0). The finite range keeps the cumulative chunk decay within the bf16
+        dynamic range, letting the chunkwise kernel use dense Tensor-Core tiles.
+        Do NOT switch this to the softplus form — that is Kimi Linear, not K3.
+        Computed in fp32.
+        """
         B, T, _ = x.shape
         H, d_k = self.cfg.num_heads, self.cfg.head_dim_k
-        raw = self.w_alpha_up(self.w_alpha_down(x)).view(B, T, H, d_k)
+        z = self.w_alpha_up(self.w_alpha_down(x)).view(B, T, H, d_k)
         dt_bias = self.dt_bias.view(H, d_k)
         return self.cfg.gate_lower_bound * torch.sigmoid(
-            self.A_log.exp().view(1, 1, H, 1) * (raw.float() + dt_bias)
+            self.A_log.exp().view(1, 1, H, 1) * (z.float() + dt_bias)
         )
 
-    def forward(self, x, mode="chunk", cache: KDACache | None = None, use_cache=False):
+    def forward(
+        self,
+        x: torch.Tensor,
+        mode: str = "chunk",
+        cache: KDACache | None = None,
+        use_cache: bool = False,
+    ) -> tuple[torch.Tensor, KDACache | None]:
         """Run the KDA layer.
 
         mode:  "chunk" for training/prefill, "recurrent" for decode.

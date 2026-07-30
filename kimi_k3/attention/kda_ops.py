@@ -28,11 +28,21 @@ Notation (identical to the paper):
     gc within-chunk cumulative log-decay (the paper's gamma, Eqs. 3-9)
 """
 
+from __future__ import annotations
+
 import torch
 import torch.nn.functional as F
+from torch import Tensor
 
 
-def kda_recurrence(q, k, v, g, beta, initial_state=None):
+def kda_recurrence(
+    q: Tensor,
+    k: Tensor,
+    v: Tensor,
+    g: Tensor,
+    beta: Tensor,
+    initial_state: Tensor | None = None,
+) -> tuple[Tensor, Tensor]:
     """Per-token KDA recurrence (Eq. 1 of the paper).
 
         S_t = (I - beta_t k_t k_t^T) Diag(alpha_t) S_{t-1} + beta_t k_t v_t^T
@@ -89,7 +99,15 @@ def kda_recurrence(q, k, v, g, beta, initial_state=None):
     return o.to(dtype), S
 
 
-def kda_chunkwise(q, k, v, g, beta, chunk_size, initial_state=None):
+def kda_chunkwise(
+    q: Tensor,
+    k: Tensor,
+    v: Tensor,
+    g: Tensor,
+    beta: Tensor,
+    chunk_size: int,
+    initial_state: Tensor | None = None,
+) -> tuple[Tensor, Tensor]:
     """Chunkwise-parallel KDA (Listing 8b and Eqs. 2-9 of the paper).
 
     Same math as kda_recurrence, but the sequence is processed in chunks of

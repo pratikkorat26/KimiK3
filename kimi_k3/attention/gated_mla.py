@@ -73,7 +73,9 @@ class GatedMLA(nn.Module):
         self.w_gate = nn.Linear(d, H * d_v, bias=False)
         self.w_o = nn.Linear(H * d_v, d, bias=False)
 
-    def _up_kv(self, kv_latent: torch.Tensor):
+    def _up_kv(
+        self, kv_latent: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """kv_latent (B, T, d_c) → k_content (B,H,T,d_content), v (B,H,T,d_v)."""
         B, T, _ = kv_latent.shape
         H, d_c, d_v = self.n_heads, self.qk_content_dim, self.v_head_dim
@@ -82,7 +84,13 @@ class GatedMLA(nn.Module):
         k_content, v = up.split([d_c, d_v], dim=-1)
         return k_content, v
 
-    def _attend(self, q, k, v, prefix_len=0):
+    def _attend(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        prefix_len: int = 0,
+    ) -> torch.Tensor:
         """Causal (or decode) attention.
 
         q: (B, H, T_q, q_head_dim); k: (B, H, T_k, q_head_dim); v: (B, H, T_k, d_v)
@@ -96,7 +104,13 @@ class GatedMLA(nn.Module):
         attn = F.softmax(scores, dim=-1, dtype=torch.float32).to(q.dtype)
         return torch.matmul(attn, v)                                   # (B, H, T_q, d_v)
 
-    def forward(self, x, mode="chunk", cache: MLACache | None = None, use_cache=False):
+    def forward(
+        self,
+        x: torch.Tensor,
+        mode: str = "chunk",
+        cache: MLACache | None = None,
+        use_cache: bool = False,
+    ) -> tuple[torch.Tensor, MLACache | None]:
         """Run Gated MLA. `mode` is accepted for API parity with KDA (ignored)."""
         del mode
         B, T, _ = x.shape
