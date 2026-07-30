@@ -55,6 +55,22 @@ python scripts/smoke_forward.py small         # forward + greedy/sampled generat
 python scripts/bench_context.py --preset tiny --seq 65536   # 64K KDA-only forward
 ```
 
+## Training (Phase 2)
+
+The model is trainable end-to-end on CPU. The overfit gate proves the
+forward→loss→backward→optimizer path; then train on a corpus and generate.
+
+```bash
+python scripts/overfit.py                       # loss → ~0 on a fixed batch (sanity gate)
+python scripts/train.py --preset small --steps 200   # train on the bundled corpus → out/
+python scripts/generate_text.py --ckpt out/ckpt_final.pt --prompt "Alice was"
+```
+
+- Tokenizer: byte-level by default (zero-dep); `--tokenizer gpt2` uses a BPE
+  (`pip install -e '.[train]'` for tiktoken).
+- Optimizer is AdamW; keep `--seq-len`/`--batch-size` small on CPU (the readable
+  ops aren't throughput-optimized yet). See [docs/roadmap.md](docs/roadmap.md).
+
 ## Install & test
 
 ```bash

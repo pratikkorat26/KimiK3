@@ -259,7 +259,7 @@ class KimiK3Model(nn.Module):
             history, c = block(
                 history, mode=mode, cache=layer_cache, use_cache=use_cache
             )
-            if use_cache:
+            if new_cache is not None and c is not None:
                 new_cache.set(i, c)
 
         if self.cfg.use_interim_residual:
@@ -364,20 +364,20 @@ class KimiK3Model(nn.Module):
         if max_new_tokens == 0:
             return tokens
 
-        sampling = dict(
-            do_sample=do_sample,
-            temperature=temperature,
-            top_k=top_k,
-            top_p=top_p,
-            generator=generator,
-        )
         batch_size = tokens.shape[0]
 
         was_training = self.training
         self.eval()
         try:
             logits, cache = self(tokens, mode="chunk", use_cache=True)
-            next_tok = self._select_next(logits[:, -1], **sampling)
+            next_tok = self._select_next(
+                logits[:, -1],
+                do_sample=do_sample,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+                generator=generator,
+            )
             finished = torch.zeros(batch_size, dtype=torch.bool, device=tokens.device)
             if eos_token_id is not None:
                 finished |= next_tok.squeeze(-1) == eos_token_id
@@ -388,7 +388,14 @@ class KimiK3Model(nn.Module):
                 logits, cache = self(
                     next_tok, mode="recurrent", cache=cache, use_cache=True
                 )
-                next_tok = self._select_next(logits[:, -1], **sampling)
+                next_tok = self._select_next(
+                logits[:, -1],
+                do_sample=do_sample,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+                generator=generator,
+            )
                 if eos_token_id is not None:
                     # Already-finished rows keep emitting EOS (no drift).
                     next_tok = torch.where(

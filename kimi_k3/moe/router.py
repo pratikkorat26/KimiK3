@@ -47,7 +47,6 @@ class QuantileBalancingRouter(nn.Module):
         flat = x.reshape(-1, self.hidden_size)                     # (M, d_model)
         M = flat.shape[0]
         K = self.n_experts_per_tok
-        E = self.n_experts
 
         logits = F.linear(
             flat.float(),

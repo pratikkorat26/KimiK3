@@ -1,7 +1,23 @@
 """
-kimi_k3/data/ — data pipeline (deferred; roadmap Phase 2).
+kimi_k3/data/ — data pipeline for training.
 
-Will hold dataset loading, packing, and the progressive-length sampler
-(8K → 64K → 256K) used for the context-extension curriculum. Nothing is
-implemented during the architecture pass. See docs/roadmap.md.
+Phase 2: fixed-length causal-LM packing over a token stream, with a bundled
+tiny corpus for offline runs. The progressive-length curriculum (8K→64K→256K)
+is future work (see docs/roadmap.md).
 """
+
+from .text_dataset import (
+    TINY_CORPUS,
+    PackedTextDataset,
+    batch_iterator,
+    build_dataset,
+    load_text,
+)
+
+__all__ = [
+    "TINY_CORPUS",
+    "PackedTextDataset",
+    "batch_iterator",
+    "build_dataset",
+    "load_text",
+]
