@@ -1,0 +1,16 @@
+# virtual environment
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# checkpoints / run outputs (training comes later)
+out/
+
+# OS / editor
+.DS_Store

@@ -1,0 +1,3 @@
+# Compatibility installer for local development and tests.
+# Package metadata and dependency policy live in pyproject.toml.
+-e .[test]
