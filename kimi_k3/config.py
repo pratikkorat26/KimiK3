@@ -320,7 +320,10 @@ class ModelConfig:
             head_dim_v=64,
             max_seq_len=4096,
             force_all_kda=False,
-            chunk_size=64,
+            # chunk_size is a pure perf/memory knob (identical output for any value).
+            # KDA cost is ~O(T·C²) in the UT-solve, so smaller chunks are faster on
+            # CPU; 32 roughly halves KDA time vs 64 here. 64 is GPU-Tensor-Core-tuned.
+            chunk_size=32,
             gate_rank=64,
             kv_latent_dim=128,
             q_lora_rank=128,
