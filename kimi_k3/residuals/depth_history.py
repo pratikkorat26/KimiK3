@@ -45,21 +45,6 @@ class DepthHistory:
             self.partial = self.partial + sublayer_out
         self.sublayer_count += 1
 
-    def seal_if_due(self, block_size: int) -> None:
-        """Legacy accumulation-based sealing helper.
-
-        Model code uses :meth:`start_layer`, because Kimi K3 block sizes count
-        decoder layers rather than attention/MLP sublayers.
-        """
-        if (
-            block_size > 0
-            and self.sublayer_count > 0
-            and self.sublayer_count % block_size == 0
-            and self.partial is not None
-        ):
-            self.completed.append(self.partial)
-            self.partial = None
-
     def start_layer(self, layer_idx: int, block_size: int) -> None:
         """Seal the preceding layer block at an official AttnRes boundary."""
         if (

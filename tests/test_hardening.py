@@ -228,3 +228,61 @@ def test_generate_rejects_context_overflow():
     tokens = torch.tensor([[1, 2]], dtype=torch.long)
     with pytest.raises(ValueError, match="max_seq_len"):
         model.generate(tokens, 1)
+
+
+def test_generate_sampling_runs_and_stays_in_vocab():
+    cfg, model = make_tiny_model()
+    model.eval()
+    tokens = torch.tensor([[1, 2]], dtype=torch.long)
+    gen = torch.Generator().manual_seed(0)
+    out = model.generate(
+        tokens, 4, do_sample=True, temperature=0.8, top_k=5, top_p=0.9, generator=gen
+    )
+    assert out.shape == (1, 6)
+    assert out.min() >= 0 and out.max() < cfg.vocab_size
+
+
+def test_generate_sampling_is_reproducible_with_generator():
+    _, model = make_tiny_model()
+    model.eval()
+    tokens = torch.tensor([[1, 2]], dtype=torch.long)
+    a = model.generate(tokens, 3, do_sample=True, generator=torch.Generator().manual_seed(7))
+    b = model.generate(tokens, 3, do_sample=True, generator=torch.Generator().manual_seed(7))
+    assert torch.equal(a, b)
+
+
+def test_generate_greedy_matches_default():
+    _, model = make_tiny_model()
+    model.eval()
+    tokens = torch.tensor([[1, 2]], dtype=torch.long)
+    default = model.generate(tokens, 3)
+    explicit_greedy = model.generate(tokens, 3, do_sample=False)
+    assert torch.equal(default, explicit_greedy)
+
+
+def test_generate_eos_stops_early():
+    _, model = make_tiny_model()
+    model.eval()
+    tokens = torch.tensor([[1, 2]], dtype=torch.long)
+    # Force EOS to be whatever greedy picks first, so decoding halts immediately.
+    logits, _ = model(tokens, mode="chunk", use_cache=True)
+    first = int(logits[:, -1].argmax(-1).item())
+    out = model.generate(tokens, 10, eos_token_id=first)
+    # prompt (2) + the single emitted EOS token
+    assert out.shape[1] == 3
+    assert int(out[0, -1].item()) == first
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        (dict(do_sample=True, temperature=0.0), "temperature"),
+        (dict(do_sample=True, top_k=0), "top_k"),
+        (dict(do_sample=True, top_p=1.5), "top_p"),
+    ],
+)
+def test_generate_rejects_invalid_sampling_params(kwargs, match):
+    _, model = make_tiny_model()
+    tokens = torch.tensor([[1, 2]], dtype=torch.long)
+    with pytest.raises((TypeError, ValueError), match=match):
+        model.generate(tokens, 2, **kwargs)

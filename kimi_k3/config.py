@@ -12,7 +12,17 @@ fast CPU unit tests, and ModelConfig.small() for a ~100M K3-like runnable model.
 MLA config names (ours) vs Moonshot aliases (comments only):
   kv_latent_dim   ↔ kv_lora_rank
   qk_content_dim  ↔ qk_nope_head_dim
-  qk_shared_dim   ↔ qk_rope_head_dim  (NoPE: not RoPE)
+  qk_shared_dim   ↔ qk_rope_head_dim
+
+Positional encoding — NoPE by design (do NOT "fix" this to RoPE):
+  Kimi K3 / Kimi Linear applies NO positional encoding to the attention
+  layers. KDA supplies positional structure implicitly via its per-channel
+  decay gate, so the global-attention (MLA) layers are NoPE too. This is
+  exactly what lets K3 extrapolate to long context without RoPE-extrapolation
+  artifacts. `qk_shared_dim` (alias `qk_rope_head_dim`) is a DeepSeek-MLA
+  legacy name — those channels are used, but RoPE is NOT applied. Context
+  extension 64K→256K is therefore training/curriculum-based, not RoPE scaling.
+  See docs/architecture.md.
 """
 
 from __future__ import annotations
@@ -46,7 +56,11 @@ class KDAConfig:
     gate_lower_bound: float = -5.0
     use_full_rank_gate: bool = True
     eps: float = 1e-5            # epsilon for the head-wise RMSNorm and L2Norm
-    use_q_scale: bool = True     # scale q by d_k**-0.5, as in the kernel pseudocode
+    # Kimi Linear (page 5) uses q = L2Norm(Swish(ShortConv(·))) with NO 1/sqrt(d_k)
+    # factor — softmax-style scaling has no place in linear attention. Kept as an
+    # opt-in flag; default False to match the paper. (It is only a global constant
+    # on the output, absorbed by W_o, so it never changes expressiveness.)
+    use_q_scale: bool = False
 
     def __post_init__(self) -> None:
         positive_ints = (
@@ -104,6 +118,9 @@ class ModelConfig:
     chunk_size: int = 64
     gate_rank: int = 128             # low-rank width for KDA decay projection
     kda_gate_lower_bound: float = -5.0
+    # KDA output gate: Kimi Linear (Eq. 10) uses a LOW-RANK gate (W_g^up W_g^down);
+    # the released Kimi K3 text model uses a FULL-RANK gate. Default matches K3;
+    # set False to reproduce the Kimi Linear paper exactly.
     kda_use_full_rank_gate: bool = True
 
     # --- Gated MLA (Kimi Linear NoPE structure; clear names, not LoRA/RoPE jargon) ---
@@ -324,9 +341,76 @@ class ModelConfig:
             use_interim_residual=False,
         )
 
+    @classmethod
+    def kimi_1b_64k(cls) -> "ModelConfig":
+        """~1B-total-param MoE, 64K context — the from-scratch training target.
+
+        Full Kimi K3 hybrid stack (KDA + Gated MLA + Stable LatentMoE + AttnRes),
+        scaled to ~1B total params (~0.4B active/token — embeddings + attention
+        dominate at this scale, so the active fraction is far higher than the
+        2.8T flagship's ~4%). Deviations from the flagship, and why, for study:
+          - vocab 65,536 (not 163,840): a 160K vocab would spend ~40% of a 1B
+            budget on embeddings; 64K BPE is standard at this scale.
+          - n_experts 48 (not 896): expert count is bounded by the 1B budget.
+          - block_size 4 (not 12): scaled to the 24-layer depth.
+        Dims are tuned so total params land in [0.9B, 1.1B]; verify with
+        `python scripts/param_count.py kimi_1b_64k`.
+        """
+        return cls(
+            vocab_size=65_536,
+            hidden_size=1024,
+            n_layer=24,
+            n_heads=16,
+            head_dim_k=64,
+            head_dim_v=64,
+            max_seq_len=65_536,
+            force_all_kda=False,
+            conv_kernel_size=4,
+            chunk_size=64,
+            gate_rank=128,
+            kv_latent_dim=512,
+            q_lora_rank=768,
+            qk_content_dim=64,
+            qk_shared_dim=32,
+            v_head_dim=64,
+            latent_size=512,
+            moe_intermediate_size=288,
+            n_experts=64,
+            n_experts_per_tok=8,
+            n_shared_experts=1,
+            n_dense_layers=1,
+            intermediate_size=2816,
+            situ_beta_gate=4.0,
+            situ_beta_up=25.0,
+            attn_res_block_size=4,
+            use_interim_ffn=False,
+            use_interim_residual=False,
+        )
+
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict) -> "ModelConfig":
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+
+    def to_yaml(self, path: str | None = None) -> str:
+        """Serialize to YAML. Writes to `path` if given; always returns the text."""
+        import yaml
+
+        text = yaml.safe_dump(self.to_dict(), sort_keys=True)
+        if path is not None:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+        return text
+
+    @classmethod
+    def from_yaml(cls, path: str) -> "ModelConfig":
+        """Load a ModelConfig from a YAML file (unknown keys are ignored)."""
+        import yaml
+
+        with open(path, encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+        if not isinstance(data, dict):
+            raise ValueError(f"config YAML must be a mapping, got {type(data).__name__}")
+        return cls.from_dict(data)

@@ -235,11 +235,11 @@ class KimiK3Model(nn.Module):
 
     def forward(
         self,
-        tokens,
-        mode="chunk",
+        tokens: torch.Tensor,
+        mode: str = "chunk",
         cache: AttentionCache | None = None,
-        use_cache=False,
-    ):
+        use_cache: bool = False,
+    ) -> tuple[torch.Tensor, AttentionCache | None]:
         """tokens (B, T) → (logits (B, T, vocab), AttentionCache | None)."""
         self._validate_tokens(tokens)
         prefix_len = self._validate_cache(
@@ -272,9 +272,63 @@ class KimiK3Model(nn.Module):
         logits = self.lm_head(x)
         return logits, new_cache
 
+    def _select_next(
+        self,
+        logits_last: torch.Tensor,
+        *,
+        do_sample: bool,
+        temperature: float,
+        top_k: int | None,
+        top_p: float | None,
+        generator: torch.Generator | None,
+    ) -> torch.Tensor:
+        """Pick the next token from last-step logits (B, vocab) → ids (B, 1).
+
+        Greedy when do_sample is False. Otherwise apply temperature, then
+        optional top-k and top-p (nucleus) filtering, then multinomial sample.
+        """
+        if not do_sample:
+            return logits_last.argmax(dim=-1, keepdim=True)
+
+        logits = logits_last.float() / temperature
+        if top_k is not None:
+            k = min(top_k, logits.shape[-1])
+            kth = torch.topk(logits, k, dim=-1).values[:, -1, None]
+            logits = logits.masked_fill(logits < kth, float("-inf"))
+        if top_p is not None:
+            sorted_logits, sorted_idx = torch.sort(logits, descending=True, dim=-1)
+            probs = torch.softmax(sorted_logits, dim=-1)
+            cumprobs = probs.cumsum(dim=-1)
+            # Drop the tail whose *preceding* cumulative mass already exceeds p;
+            # always keep the single most-probable token.
+            remove = (cumprobs - probs) > top_p
+            remove[:, 0] = False
+            sorted_logits = sorted_logits.masked_fill(remove, float("-inf"))
+            logits = torch.full_like(logits, float("-inf")).scatter(
+                -1, sorted_idx, sorted_logits
+            )
+        probs = torch.softmax(logits, dim=-1)
+        return torch.multinomial(probs, num_samples=1, generator=generator)
+
     @torch.no_grad()
-    def generate(self, tokens, max_new_tokens):
-        """Greedy decode: chunk prefill, then recurrent steps with AttentionCache."""
+    def generate(
+        self,
+        tokens: torch.Tensor,
+        max_new_tokens: int,
+        *,
+        do_sample: bool = False,
+        temperature: float = 1.0,
+        top_k: int | None = None,
+        top_p: float | None = None,
+        eos_token_id: int | None = None,
+        generator: torch.Generator | None = None,
+    ) -> torch.Tensor:
+        """Autoregressive decode: chunk prefill, then recurrent steps with cache.
+
+        Greedy by default (do_sample=False). With do_sample=True, sample with
+        temperature / top_k / top_p. If eos_token_id is given, finished
+        sequences keep emitting EOS and decoding stops early once all are done.
+        """
         if not isinstance(max_new_tokens, int) or isinstance(max_new_tokens, bool):
             raise TypeError(
                 "max_new_tokens must be a non-negative integer, "
@@ -284,6 +338,22 @@ class KimiK3Model(nn.Module):
             raise ValueError(
                 f"max_new_tokens must be non-negative, got {max_new_tokens}"
             )
+        if do_sample and (
+            not isinstance(temperature, (int, float))
+            or isinstance(temperature, bool)
+            or temperature <= 0
+        ):
+            raise ValueError(f"temperature must be positive, got {temperature!r}")
+        if top_k is not None and (
+            not isinstance(top_k, int) or isinstance(top_k, bool) or top_k <= 0
+        ):
+            raise ValueError(f"top_k must be a positive integer or None, got {top_k!r}")
+        if top_p is not None and (
+            not isinstance(top_p, (int, float))
+            or isinstance(top_p, bool)
+            or not 0.0 < top_p <= 1.0
+        ):
+            raise ValueError(f"top_p must be in (0, 1] or None, got {top_p!r}")
         self._validate_tokens(tokens)
         requested_length = tokens.shape[1] + max_new_tokens
         if requested_length > self.cfg.max_seq_len:
@@ -294,17 +364,39 @@ class KimiK3Model(nn.Module):
         if max_new_tokens == 0:
             return tokens
 
+        sampling = dict(
+            do_sample=do_sample,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            generator=generator,
+        )
+        batch_size = tokens.shape[0]
+
         was_training = self.training
         self.eval()
         try:
             logits, cache = self(tokens, mode="chunk", use_cache=True)
-            next_tok = logits[:, -1:].argmax(-1)
+            next_tok = self._select_next(logits[:, -1], **sampling)
+            finished = torch.zeros(batch_size, dtype=torch.bool, device=tokens.device)
+            if eos_token_id is not None:
+                finished |= next_tok.squeeze(-1) == eos_token_id
             seq = [tokens, next_tok]
             for _ in range(max_new_tokens - 1):
+                if eos_token_id is not None and bool(finished.all()):
+                    break
                 logits, cache = self(
                     next_tok, mode="recurrent", cache=cache, use_cache=True
                 )
-                next_tok = logits[:, -1:].argmax(-1)
+                next_tok = self._select_next(logits[:, -1], **sampling)
+                if eos_token_id is not None:
+                    # Already-finished rows keep emitting EOS (no drift).
+                    next_tok = torch.where(
+                        finished.unsqueeze(-1),
+                        next_tok.new_full(next_tok.shape, eos_token_id),
+                        next_tok,
+                    )
+                    finished |= next_tok.squeeze(-1) == eos_token_id
                 seq.append(next_tok)
             return torch.cat(seq, dim=1)
         finally:

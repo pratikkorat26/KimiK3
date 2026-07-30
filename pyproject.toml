@@ -8,13 +8,18 @@ version = "0.1.0"
 description = "Readable PyTorch reference implementation of the Kimi K3 architecture"
 requires-python = ">=3.10"
 dependencies = [
-    "torch",
-    "numpy",
+    "torch>=2.4",
+    "pyyaml>=6",
 ]
 
 [project.optional-dependencies]
 test = [
     "pytest>=8",
+]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+    "mypy>=1.11",
 ]
 
 [tool.setuptools.packages.find]
@@ -23,3 +28,17 @@ include = ["kimi_k3*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+# Study reference: full-strictness typing is a non-goal. Kept lenient so mypy
+# checks annotated signatures without flagging the dynamically-typed torch hot
+# paths. Tighten (e.g. check_untyped_defs) once the code is fully annotated.
