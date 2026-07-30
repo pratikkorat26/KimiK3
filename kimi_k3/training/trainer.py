@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 import os
+import time
 from collections.abc import Iterator
 
 import torch
@@ -27,11 +28,16 @@ from .loss import causal_lm_loss, perplexity
 def resolve_device(name: str) -> torch.device:
     """Map a TrainConfig.device string to a concrete torch.device.
 
-    "auto" chooses cuda if available else cpu. MPS is opt-in only (some ops used
-    here lack MPS kernels), requested explicitly via device="mps".
+    "auto" prefers cuda, then Apple MPS, then cpu. The KDA triangular-solve has an
+    MPS fallback (see _unit_lower_tri_inverse), so MPS is a safe default on a Mac;
+    force cpu with device="cpu" if any op is unsupported on your torch build.
     """
     if name == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        if torch.backends.mps.is_available():
+            return torch.device("mps")
+        return torch.device("cpu")
     if name == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("device='cuda' requested but CUDA is not available")
     if name == "mps" and not torch.backends.mps.is_available():
@@ -122,12 +128,20 @@ class Trainer:
             )
         gen = torch.Generator().manual_seed(self.cfg.seed)
         batches = self._cycle(train_ds, gen)
+        window_start = time.time()
         while self.step < self.cfg.max_steps:
             x, y = next(batches)
             loss = self.train_step(x, y)
             step = self.step
             if step % self.cfg.log_interval == 0:
-                print(f"step {step:5d} | loss {loss:.4f} | lr {self._lr_at(step):.2e}")
+                dt = time.time() - window_start
+                toks = self.cfg.batch_size * self.cfg.seq_len * self.cfg.log_interval
+                tps = toks / dt if dt > 0 else 0.0
+                print(
+                    f"step {step:5d} | loss {loss:.4f} | lr {self._lr_at(step):.2e} "
+                    f"| {tps:,.0f} tok/s"
+                )
+                window_start = time.time()
             if val_ds is not None and step % self.cfg.eval_interval == 0:
                 vloss, vppl = self.evaluate(batch_iterator(val_ds, self.cfg.batch_size, shuffle=False))
                 print(f"  eval @ {step}: loss {vloss:.4f} | ppl {vppl:.1f}")

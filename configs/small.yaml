@@ -1,5 +1,5 @@
 attn_res_block_size: 4
-chunk_size: 64
+chunk_size: 32
 conv_kernel_size: 4
 eps: 1.0e-05
 force_all_kda: false

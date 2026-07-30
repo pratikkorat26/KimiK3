@@ -43,10 +43,23 @@ extendable to 256K**.
 - Agentic / tool-use fine-tuning (browser use, tool calling).
 - 256K is the hard ceiling for this project — no further extension planned.
 
+## Throughput (Phase 3a) — status
+
+- KDA `kda_chunkwise` is now **vectorized** (masked-decay einsum + batched
+  triangular solve; the transparent loop is kept as `kda_chunkwise_reference` and
+  as the equivalence-test oracle). MPS is a safe auto device (triangular-solve has
+  an MPS fallback), and the trainer logs tokens/sec; `scripts/bench_train.py` A/Bs
+  vectorized vs loop across CPU/MPS.
+- **Honest findings** (`small`, CPU): the vectorization is ~a wash on CPU (the loop
+  bodies were already vectorized tensor ops); the real CPU lever is **chunk_size**
+  (KDA cost ~O(T·C²)) — C=64→16 is ~1.4×, so `small` now defaults to C=32. KDA (not
+  MoE) dominates the model's CPU time. The vectorization's payoff is on **MPS/GPU**
+  (kernel-launch reduction) — measure with `bench_train.py --device mps`.
+- Still open: a matmul-factored intra-chunk with the paper's 16-token secondary
+  tiling (avoids the (C,C,d_k) intermediate for a genuine CPU win); batched MoE
+  dispatch (small effect — MoE is ~4% of CPU time here); Triton/CUDA fused kernels.
+
 ## Known limitations of the current reference
 
-- Pure-PyTorch KDA ops use Python loops (readable, not fast); MoE dispatch loops
-  over experts. Fine at study scale, not for real pretraining throughput — Phase 3
-  will need fused/batched kernels or an existing linear-attention kernel library.
 - Gated MLA is full O(T²) attention — a hybrid 64K forward needs GPU/kernels;
   `scripts/bench_context.py` demonstrates long context on the KDA-only path.

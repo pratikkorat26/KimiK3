@@ -9,7 +9,10 @@ Paper: "Kimi Linear: An Expressive, Efficient Attention Architecture"
      the correctness reference for the chunkwise form.
 
   2) kda_chunkwise — the hardware-efficient chunkwise-parallel form used for
-     training (Listing 8b and Eqs. 2-9 of the paper).
+     training (Listing 8b and Eqs. 2-9 of the paper). This is the VECTORIZED
+     default (no Python loops over the chunk length); kda_chunkwise_reference
+     is the transparent loop version kept for study and as an equivalence test
+     oracle. Both are numerically identical.
 
 KDA extends Gated DeltaNet by replacing the per-head scalar decay with a
 per-channel diagonal gate Diag(alpha_t): every channel of the d_k state
@@ -99,6 +102,27 @@ def kda_recurrence(
     return o.to(dtype), S
 
 
+def _unit_lower_tri_inverse(L: Tensor) -> Tensor:
+    """Inverse of a batched unit lower-triangular matrix L, shape (..., C, C).
+
+    Uses torch.linalg.solve_triangular where available; on MPS (which lacks a
+    triangular-solve kernel) it falls back to exact forward substitution — the
+    same algorithm kda_chunkwise_reference uses inline.
+    """
+    C = L.shape[-1]
+    eye = torch.eye(C, device=L.device, dtype=L.dtype)
+    if L.device.type != "mps":
+        rhs = eye.expand(L.shape).contiguous()
+        return torch.linalg.solve_triangular(L, rhs, upper=False, unitriangular=True)
+    # MPS fallback: (I + StrictTril(L))^{-1} by row-wise forward substitution.
+    inv = -(L - eye)                                  # -StrictTril(L)
+    for i in range(1, C):
+        inv[..., i, :i] = inv[..., i, :i].clone() + (
+            inv[..., i, :, None].clone() * inv[..., :, :i].clone()
+        ).sum(-2)
+    return inv + eye
+
+
 def kda_chunkwise(
     q: Tensor,
     k: Tensor,
@@ -108,7 +132,108 @@ def kda_chunkwise(
     chunk_size: int,
     initial_state: Tensor | None = None,
 ) -> tuple[Tensor, Tensor]:
-    """Chunkwise-parallel KDA (Listing 8b and Eqs. 2-9 of the paper).
+    """Vectorized chunkwise-parallel KDA (Listing 8b and Eqs. 2-9 of the paper).
+
+    Numerically identical to kda_chunkwise_reference but with the two intra-chunk
+    Python loops removed: the A_qk/A_kk matrices are built with a single masked
+    einsum, and the UT-transform inverse uses a batched triangular solve. Only
+    the inter-chunk state scan over N chunks (inherently sequential) remains.
+
+    Where this helps: on MPS/CUDA, collapsing the ~2*C sequential per-chunk kernel
+    launches into a few large kernels is a real speedup. On CPU it is roughly a
+    wash (the per-iteration ops were already vectorized tensor ops, so the Python
+    overhead is small); there the primary throughput lever is chunk_size — KDA cost
+    is ~O(T·C²), so a smaller C is faster (see ModelConfig.small). Measure your
+    hardware with scripts/bench_train.py.
+
+    Shapes:
+        q, k:          (B, H, T, d_k)    L2-normalized queries / keys
+        v:             (B, H, T, d_v)    values
+        g:             (B, H, T, d_k)    per-channel log-decay, g = log(alpha) <= 0
+        beta:          (B, H, T)         per-head delta-rule step size in (0, 1)
+        chunk_size:    int               C (paper: 64)
+        initial_state: (B, H, d_k, d_v)  optional S_0, fp32
+
+    Returns:
+        o: (B, H, T, d_v)       per-token outputs, cast back to q.dtype
+        S: (B, H, d_k, d_v)     final recurrent state after the last chunk, fp32
+    """
+    dtype = q.dtype
+    q, k, v, g, beta = (t.float() for t in (q, k, v, g, beta))
+
+    B, H, T, d_k = q.shape
+    d_v = v.shape[-1]
+    C = chunk_size
+
+    # Step 1: pad to whole chunks, reshape, cumulative within-chunk log-decay.
+    N = (T + C - 1) // C
+    T_pad = N * C
+    if T_pad != T:
+        pad = (0, 0, 0, T_pad - T)
+        q, k, v, g = (F.pad(t, pad) for t in (q, k, v, g))
+        beta = F.pad(beta, (0, T_pad - T))
+    q = q.reshape(B, H, N, C, d_k)
+    k = k.reshape(B, H, N, C, d_k)
+    v = v.reshape(B, H, N, C, d_v)
+    g = g.reshape(B, H, N, C, d_k)
+    beta = beta.reshape(B, H, N, C)
+    gc = g.cumsum(dim=-2)                              # gc: (B, H, N, C, d_k)
+
+    # Step 2 (vectorized): pairwise between-position decay exp(gc_i - gc_j).
+    # Mask the illegal region to -inf BEFORE exp so no exp of a large positive is
+    # ever formed (preserves the paper's "every surviving exp is a decay <= 1"
+    # stability under the bounded g_min = -5 decay). delta[..., i, j, d].
+    delta = gc.unsqueeze(4) - gc.unsqueeze(3)         # (B, H, N, C, C, d_k)
+    i_ar = torch.arange(C, device=q.device).view(C, 1)
+    j_ar = torch.arange(C, device=q.device).view(1, C)
+    causal_illegal = (j_ar > i_ar).view(1, 1, 1, C, C, 1)   # A_qk keeps j <= i
+    strict_illegal = (j_ar >= i_ar).view(1, 1, 1, C, C, 1)  # A_kk keeps j <  i
+    decay_qk = delta.masked_fill(causal_illegal, float("-inf")).exp()
+    decay_kk = delta.masked_fill(strict_illegal, float("-inf")).exp()
+    A_qk = (q.unsqueeze(4) * k.unsqueeze(3) * decay_qk).sum(-1)   # (B, H, N, C, C)
+    A_kk = (k.unsqueeze(4) * k.unsqueeze(3) * decay_kk).sum(-1)   # (B, H, N, C, C) strictly lower
+    A_kk = A_kk * beta.unsqueeze(-1)                             # Diag(beta) left (row i)
+
+    # Step 3 (vectorized): M = (I + StrictTril(Diag(beta) A_kk))^{-1} Diag(beta).
+    # A_kk is already strictly-lower, so I + A_kk is unit lower-triangular.
+    eye = torch.eye(C, device=q.device)
+    M = _unit_lower_tri_inverse(eye + A_kk) * beta.unsqueeze(-2)  # right Diag(beta) (col j)
+
+    # Step 4: WY factors (Eq. 7).
+    W = torch.einsum('bhnij,bhnjd->bhnid', M, gc.exp() * k)       # (B, H, N, C, d_k)
+    U = torch.einsum('bhnij,bhnjd->bhnid', M, v)                  # (B, H, N, C, d_v)
+
+    # Step 5: inter-chunk recurrence (Eqs. 8-9) — the only remaining loop.
+    S = initial_state.float() if initial_state is not None else q.new_zeros(B, H, d_k, d_v)
+    O_chunks = []
+    for n in range(N):
+        q_decayed = q[:, :, n] * gc[:, :, n].exp()               # Gamma ⊙ Q
+        inter = torch.einsum('bhck,bhkv->bhcv', q_decayed, S)
+        pseudo = U[:, :, n] - torch.einsum('bhck,bhkv->bhcv', W[:, :, n], S)
+        intra = torch.einsum('bhcj,bhjv->bhcv', A_qk[:, :, n], pseudo)
+        O_chunks.append(inter + intra)
+
+        gc_last = gc[:, :, n, -1, :]
+        decay_to_end = (gc_last.unsqueeze(-2) - gc[:, :, n]).exp()
+        S = gc_last.exp().unsqueeze(-1) * S + torch.einsum(
+            'bhck,bhcv->bhkv', k[:, :, n] * decay_to_end, pseudo
+        )
+
+    out_all = torch.stack(O_chunks, dim=2)
+    o = out_all.reshape(B, H, T_pad, d_v)[:, :, :T]
+    return o.to(dtype), S
+
+
+def kda_chunkwise_reference(
+    q: Tensor,
+    k: Tensor,
+    v: Tensor,
+    g: Tensor,
+    beta: Tensor,
+    chunk_size: int,
+    initial_state: Tensor | None = None,
+) -> tuple[Tensor, Tensor]:
+    """Transparent loop-based chunkwise KDA — the study reference / test oracle.
 
     Same math as kda_recurrence, but the sequence is processed in chunks of
     C tokens: all intra-chunk work is done in parallel with matmuls, while a

@@ -59,6 +59,18 @@ def test_checkpoint_save_load_roundtrip(tmp_path):
         assert torch.equal(p1, p2)
 
 
+def test_mps_smoke():
+    if not torch.backends.mps.is_available():
+        pytest.skip("MPS unavailable")
+    model, cfg = _tiny_model()
+    tc = TrainConfig(max_steps=3, warmup_steps=1, device="mps")
+    trainer = Trainer(model, tc)
+    x = torch.randint(0, cfg.vocab_size, (2, 16))
+    y = torch.randint(0, cfg.vocab_size, (2, 16))
+    losses = trainer.overfit(x, y, 3)
+    assert all(v == v for v in losses)  # no NaN
+
+
 def test_train_config_rejects_bad_values():
     with pytest.raises(ValueError, match="batch_size"):
         TrainConfig(batch_size=0)
