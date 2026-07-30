@@ -242,6 +242,6 @@ def kda_chunkwise(
         S = gc_last.exp().unsqueeze(-1) * S + torch.einsum('bhck,bhcv->bhkv', k[:, :, n] * decay_to_end, pseudo)
         # S: (B, H, d_k, d_v)   Diag(gamma_C) S + (Gamma_{i->C} ⊙ K)^T (U - W S)
 
-    O = torch.stack(O_chunks, dim=2)                  # O: (B, H, N, C, d_v)
-    o = O.reshape(B, H, T_pad, d_v)[:, :, :T]         # o: (B, H, T, d_v)   drop the padding
+    out_all = torch.stack(O_chunks, dim=2)            # out_all: (B, H, N, C, d_v)
+    o = out_all.reshape(B, H, T_pad, d_v)[:, :, :T]   # o: (B, H, T, d_v)   drop the padding
     return o.to(dtype), S

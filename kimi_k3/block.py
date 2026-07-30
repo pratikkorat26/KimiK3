@@ -32,6 +32,7 @@ class KimiK3Block(nn.Module):
         self.attn_type = cfg.attention_type(layer_idx)
 
         self.attn_norm = rms_norm(cfg.hidden_size, cfg.eps)
+        self.attn: nn.Module
         if self.attn_type == "kda":
             self.attn = KimiDeltaAttention(cfg.kda_config())
         else:

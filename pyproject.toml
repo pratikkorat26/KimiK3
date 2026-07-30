@@ -16,10 +16,14 @@ dependencies = [
 test = [
     "pytest>=8",
 ]
+train = [
+    "tiktoken>=0.7",
+]
 dev = [
     "pytest>=8",
     "ruff>=0.6",
     "mypy>=1.11",
+    "tiktoken>=0.7",
 ]
 
 [tool.setuptools.packages.find]
@@ -30,7 +34,9 @@ testpaths = ["tests"]
 addopts = "-ra"
 
 [tool.ruff]
-line-length = 100
+# 120 accommodates the deliberate trailing shape-annotation comments in the
+# attention/MoE math (e.g. kda_ops.py) without wrapping them into noise.
+line-length = 120
 target-version = "py310"
 
 [tool.ruff.lint]

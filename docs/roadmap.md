@@ -13,15 +13,18 @@ extendable to 256K**.
 - File-based configs (`configs/*.yaml`), docs, dev tooling (ruff/mypy/CI),
   hot-path type hints, removed dead code.
 
-## Phase 2 — Minimal trainability
+## Phase 2 — Minimal trainability ✅ (in progress)
 
-- **Tokenizer** (`kimi_k3/tokenizer/`): train/load a BPE tokenizer for the
-  65,536-token vocab.
-- **Data** (`kimi_k3/data/`): dataset loading + sequence packing; a
-  progressive-length sampler (8K → 64K → 256K).
-- **Training** (`kimi_k3/training/`): next-token cross-entropy loss, optimizer,
-  checkpointing, a minimal train loop. Overfit a tiny corpus to validate the
-  loss/backprop path end-to-end on the `small` preset.
+- **Tokenizer** (`kimi_k3/tokenizer/`): ✅ `ByteTokenizer` (zero-dep) + `TiktokenTokenizer`
+  (GPT-2 BPE) behind a shared protocol. Training our own BPE for the 65,536 vocab is
+  still future work.
+- **Data** (`kimi_k3/data/`): ✅ fixed-length causal-LM packing + bundled tiny corpus.
+  The progressive-length sampler (8K → 64K → 256K) remains a stub.
+- **Training** (`kimi_k3/training/`): ✅ cross-entropy loss, `TrainConfig`, AdamW `Trainer`
+  (warmup+cosine, grad-clip, checkpointing, overfit helper). Validated end-to-end: the
+  overfit gate drives loss → ~0, and `scripts/train.py` learns on the tiny corpus.
+- **Still open**: Per-Head Muon optimizer; MTP heads; throughput (fused KDA / batched MoE)
+  before any longer run.
 
 ## Phase 3 — 1B pretraining
 

@@ -115,7 +115,7 @@ class GatedMLA(nn.Module):
         del mode
         B, T, _ = x.shape
         H = self.n_heads
-        d_content, d_shared, d_v = self.qk_content_dim, self.qk_shared_dim, self.v_head_dim
+        d_shared, d_v = self.qk_shared_dim, self.v_head_dim
         d_c = self.kv_latent_dim
         if cache is not None:
             if not isinstance(cache, MLACache):
