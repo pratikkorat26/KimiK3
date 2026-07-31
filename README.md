@@ -80,8 +80,15 @@ pytest
 ruff check . && mypy kimi_k3
 ```
 
+For the local Hugging Face 100M pretraining pipeline, dataset preparation,
+training, resume, and monitoring commands, see
+[`docs/pretraining.md`](docs/pretraining.md).
+Completed checks, verification boundaries, and remaining validation work are
+tracked in [`docs/verification.md`](docs/verification.md).
+
 ## Docs
 
 - [docs/architecture.md](docs/architecture.md) — the architecture, with math and rationale.
 - [docs/kimi-k3-notes.md](docs/kimi-k3-notes.md) — research digest + sources.
 - [docs/roadmap.md](docs/roadmap.md) — path to 1B training and 256K context.
+- [docs/verification.md](docs/verification.md) — verified behavior and pending validation.
