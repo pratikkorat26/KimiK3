@@ -36,6 +36,12 @@ class QuantileBalancingRouter(nn.Module):
         self.w_router = nn.Linear(cfg.hidden_size, cfg.n_experts, bias=False)
         # Frozen at inference; updated in-place during training after routing
         self.expert_bias = nn.Parameter(torch.zeros(cfg.n_experts), requires_grad=False)
+        self.last_expert_counts: torch.Tensor
+        self.register_buffer(
+            "last_expert_counts",
+            torch.zeros(cfg.n_experts, dtype=torch.long),
+            persistent=False,
+        )
 
     def forward(self, x: torch.Tensor):
         """Route tokens; optionally refresh expert_bias for the *next* batch."""
@@ -58,8 +64,14 @@ class QuantileBalancingRouter(nn.Module):
         topk_w = scores.gather(1, topk_idx)
         topk_w = topk_w / (topk_w.sum(dim=-1, keepdim=True) + 1e-20)
         topk_w = topk_w * self.routed_scaling_factor
+        with torch.no_grad():
+            counts = torch.bincount(topk_idx.reshape(-1), minlength=self.n_experts)
+            self.last_expert_counts.copy_(counts)
 
-        if self.training and M > 0:
+        # Reentrant activation checkpointing runs its first pass under no_grad
+        # and recomputes under grad. Updating only in the grad-enabled pass
+        # prevents the non-optimizer router state from advancing twice.
+        if self.training and torch.is_grad_enabled() and M > 0:
             self._update_bias(scores.detach())
 
         topk_idx = topk_idx.view(*leading, K)

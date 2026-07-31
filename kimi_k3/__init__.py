@@ -45,3 +45,12 @@ __all__ = [
     "kda_chunkwise",
     "kda_recurrence",
 ]
+
+# Hugging Face is an optional pretraining dependency. Keep the core package
+# importable for lightweight architecture tests without transformers installed.
+try:
+    from .hf import KimiK3ForCausalLM, KimiK3HFConfig
+
+    __all__ += ["KimiK3ForCausalLM", "KimiK3HFConfig"]
+except ImportError:
+    pass

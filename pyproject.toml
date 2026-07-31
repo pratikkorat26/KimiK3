@@ -17,13 +17,29 @@ test = [
     "pytest>=8",
 ]
 train = [
+    "accelerate>=1.2,<2",
+    "datasets>=3.2,<5",
+    "numpy>=2,<2.3",
+    "safetensors>=0.5",
+    "tensorboard>=2.18",
     "tiktoken>=0.7",
+    "tokenizers>=0.21,<1",
+    "transformers>=4.47,<6",
 ]
 dev = [
     "pytest>=8",
     "ruff>=0.6",
     "mypy>=1.11",
     "tiktoken>=0.7",
+]
+pretrain = [
+    "accelerate>=1.2,<2",
+    "datasets>=3.2,<5",
+    "numpy>=2,<2.3",
+    "safetensors>=0.5",
+    "tensorboard>=2.18",
+    "tokenizers>=0.21,<1",
+    "transformers>=4.47,<6",
 ]
 
 [tool.setuptools.packages.find]

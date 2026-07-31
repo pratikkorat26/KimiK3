@@ -6,11 +6,39 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 build/
 dist/
 
-# checkpoints / run outputs (training comes later)
+# Local caches and temporary files
+/.cache/
+/.huggingface/
+/tmp/
+
+# Datasets, checkpoints, logs, and run outputs
 out/
+.artifacts/
+/data/
+/datasets/
+/checkpoints/
+/models/
+/runs/
+/logs/
+/tensorboard/
+/wandb/
+events.out.tfevents.*
+
+# Model and export artifacts
+*.bin
+*.ckpt
+*.gguf
+*.onnx
+*.pt
+*.pth
+*.safetensors
 
 # OS / editor
 .DS_Store

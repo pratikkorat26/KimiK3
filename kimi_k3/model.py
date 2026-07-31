@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 
 from .attention.cache import AttentionCache, KDACache, MLACache
 from .block import KimiK3Block
@@ -38,6 +39,7 @@ class KimiK3Model(nn.Module):
         self.out_res = BlockAttnRes(cfg, layer_idx=cfg.n_layer)
         self.norm = rms_norm(cfg.hidden_size, cfg.eps)
         self.lm_head = nn.Linear(cfg.hidden_size, cfg.vocab_size, bias=False)
+        self.gradient_checkpointing = False
         self.apply(self._init_weights)
         if cfg.tie_word_embeddings:
             self.lm_head.weight = self.embed_tokens.weight
@@ -61,6 +63,57 @@ class KimiK3Model(nn.Module):
             # Additive path: partial is the residual stream, starts at embedding
             return DepthHistory(completed=[], partial=embed, sublayer_count=0)
         return DepthHistory.from_embedding(embed)
+
+    def gradient_checkpointing_enable(self) -> None:
+        """Checkpoint decoder blocks during training to reduce activation memory."""
+        self.gradient_checkpointing = True
+
+    def gradient_checkpointing_disable(self) -> None:
+        self.gradient_checkpointing = False
+
+    @staticmethod
+    def _history_tensors(history: DepthHistory) -> tuple[torch.Tensor, ...]:
+        tensors = tuple(history.completed)
+        if history.partial is not None:
+            tensors += (history.partial,)
+        return tensors
+
+    def _checkpointed_block(
+        self,
+        block: KimiK3Block,
+        history: DepthHistory,
+    ) -> DepthHistory:
+        completed_count = len(history.completed)
+        has_partial = history.partial is not None
+        sublayer_count = history.sublayer_count
+
+        def run(*state: torch.Tensor) -> tuple[torch.Tensor, ...]:
+            completed = list(state[:completed_count])
+            partial = state[completed_count] if has_partial else None
+            local = DepthHistory(
+                completed=completed,
+                partial=partial,
+                sublayer_count=sublayer_count,
+            )
+            updated, _ = block(local, mode="chunk", cache=None, use_cache=False)
+            return self._history_tensors(updated)
+
+        state = self._history_tensors(history)
+        updated_state = checkpoint(run, *state, use_reentrant=True)
+        if isinstance(updated_state, torch.Tensor):
+            updated_state = (updated_state,)
+
+        seals_block = (
+            block.layer_idx > 0
+            and block.layer_idx % block.attn_res.block_size == 0
+            and has_partial
+        )
+        new_completed_count = completed_count + int(seals_block)
+        return DepthHistory(
+            completed=list(updated_state[:new_completed_count]),
+            partial=updated_state[new_completed_count],
+            sublayer_count=sublayer_count + 2,
+        )
 
     def _validate_tokens(self, tokens: torch.Tensor) -> None:
         if not isinstance(tokens, torch.Tensor):
@@ -255,10 +308,21 @@ class KimiK3Model(nn.Module):
             new_cache.tokens_seen = prefix_len + tokens.shape[1]
 
         for i, block in enumerate(self.blocks):
+            assert isinstance(block, KimiK3Block)
             layer_cache = cache.get(i) if cache is not None else None
-            history, c = block(
-                history, mode=mode, cache=layer_cache, use_cache=use_cache
-            )
+            if (
+                self.gradient_checkpointing
+                and self.training
+                and mode == "chunk"
+                and not use_cache
+                and cache is None
+            ):
+                history = self._checkpointed_block(block, history)
+                c = None
+            else:
+                history, c = block(
+                    history, mode=mode, cache=layer_cache, use_cache=use_cache
+                )
             if new_cache is not None and c is not None:
                 new_cache.set(i, c)
 

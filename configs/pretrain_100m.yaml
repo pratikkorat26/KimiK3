@@ -1,0 +1,69 @@
+artifact_root: .artifacts
+run_name: kimi-k3-100m-pretrain
+model_preset: small
+
+tokenizer:
+  vocab_size: 32000
+  sample_bytes: 100000000
+  model_max_length: 4096
+
+data:
+  train_tokens: 500006912
+  validation_tokens: 5000000
+  shard_tokens: 10000000
+  sources:
+    - name: english
+      dataset: HuggingFaceTB/smollm-corpus
+      subset: fineweb-edu-dedup
+      revision: main
+      text_field: text
+      weight: 0.7
+      declared_license: odc-by-1.0
+    - name: code
+      dataset: common-pile/stackv2_edu_filtered
+      subset: null
+      revision: main
+      text_field: text
+      weight: 0.2
+      declared_license: per-document-open-license
+    - name: math
+      dataset: HuggingFaceTB/finemath
+      subset: finemath-4plus
+      revision: main
+      text_field: text
+      weight: 0.1
+      declared_license: odc-by-1.0
+
+optimizer:
+  learning_rate: 0.0003
+  final_learning_rate: 0.00003
+  warmup_ratio: 0.01
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  max_grad_norm: 1.0
+
+runtime:
+  seed: 42
+  micro_batch_size: 1
+  eval_steps: 250
+  save_steps: 250
+  logging_steps: 10
+  dataloader_num_workers: 2
+  max_elapsed_days: 30.0
+  keep_last_checkpoints: 3
+  periodic_eval_tokens_per_source: 131072
+
+curriculum:
+  - name: context-512
+    tokens: 349995008
+    sequence_length: 512
+    gradient_accumulation_steps: 64
+  - name: context-1024
+    tokens: 100007936
+    sequence_length: 1024
+    gradient_accumulation_steps: 32
+  - name: context-2048
+    tokens: 50003968
+    sequence_length: 2048
+    gradient_accumulation_steps: 16
