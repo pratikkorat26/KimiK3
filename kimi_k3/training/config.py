@@ -14,12 +14,17 @@ from dataclasses import asdict, dataclass
 class TrainConfig:
     """Optimization + loop hyperparameters."""
 
-    # optimizer (AdamW; Muon is a later study item)
+    # optimizer: "adamw" or "muon" (Per-Head Muon + AdamW hybrid)
+    optimizer: str = "adamw"
     lr: float = 3e-4
     weight_decay: float = 0.1
     beta1: float = 0.9
     beta2: float = 0.95
     grad_clip: float = 1.0
+    # Muon-only (ignored when optimizer == "adamw")
+    muon_lr: float = 0.02
+    muon_momentum: float = 0.95
+    muon_ns_steps: int = 5
 
     # schedule
     max_steps: int = 200
@@ -51,6 +56,22 @@ class TrainConfig:
             raise ValueError(f"lr must be positive, got {self.lr}")
         if self.device not in ("auto", "cpu", "mps", "cuda"):
             raise ValueError(f"device must be auto/cpu/mps/cuda, got {self.device!r}")
+        if self.optimizer not in ("adamw", "muon"):
+            raise ValueError(f"optimizer must be adamw/muon, got {self.optimizer!r}")
+        if not 0.0 < self.muon_lr:
+            raise ValueError(f"muon_lr must be positive, got {self.muon_lr}")
+        if not 0.0 <= self.muon_momentum < 1.0:
+            raise ValueError(
+                f"muon_momentum must be in [0, 1), got {self.muon_momentum}"
+            )
+        if (
+            not isinstance(self.muon_ns_steps, int)
+            or isinstance(self.muon_ns_steps, bool)
+            or self.muon_ns_steps <= 0
+        ):
+            raise ValueError(
+                f"muon_ns_steps must be a positive integer, got {self.muon_ns_steps!r}"
+            )
 
     def to_dict(self) -> dict:
         return asdict(self)

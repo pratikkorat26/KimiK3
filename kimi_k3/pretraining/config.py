@@ -37,6 +37,7 @@ class TokenizerConfig:
 
 @dataclass(frozen=True)
 class OptimizerConfig:
+    name: str = "adamw"                 # "adamw" or "muon" (Per-Head Muon + AdamW)
     learning_rate: float = 3e-4
     final_learning_rate: float = 3e-5
     warmup_ratio: float = 0.01
@@ -44,6 +45,9 @@ class OptimizerConfig:
     beta1: float = 0.9
     beta2: float = 0.95
     max_grad_norm: float = 1.0
+    muon_learning_rate: float = 0.02    # Muon-only (ignored when name == "adamw")
+    muon_momentum: float = 0.95
+    muon_ns_steps: int = 5
 
 
 @dataclass(frozen=True)

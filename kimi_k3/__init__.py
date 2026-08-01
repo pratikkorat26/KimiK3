@@ -25,6 +25,7 @@ from .attention import (
 from .config import KDAConfig, ModelConfig
 from .model import KimiK3Model
 from .moe import DenseFFN, QuantileBalancingRouter, SiTUGLU, StableLatentMoE
+from .mtp import MTPHeads
 from .residuals import BlockAttnRes, DepthHistory
 
 __all__ = [
@@ -38,6 +39,7 @@ __all__ = [
     "KimiDeltaAttention",
     "KimiK3Model",
     "MLACache",
+    "MTPHeads",
     "ModelConfig",
     "QuantileBalancingRouter",
     "SiTUGLU",

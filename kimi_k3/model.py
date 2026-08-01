@@ -20,6 +20,7 @@ from .attention.cache import AttentionCache, KDACache, MLACache
 from .block import KimiK3Block
 from .config import ModelConfig
 from .moe.router import QuantileBalancingRouter
+from .mtp.heads import MTPHeads
 from .norms import rms_norm
 from .residuals import BlockAttnRes
 from .residuals.depth_history import DepthHistory
@@ -39,6 +40,8 @@ class KimiK3Model(nn.Module):
         self.out_res = BlockAttnRes(cfg, layer_idx=cfg.n_layer)
         self.norm = rms_norm(cfg.hidden_size, cfg.eps)
         self.lm_head = nn.Linear(cfg.hidden_size, cfg.vocab_size, bias=False)
+        # Multi-Token Prediction heads (training-only aux signal); None when disabled.
+        self.mtp = MTPHeads(cfg) if cfg.num_nextn_predict_layers > 0 else None
         self.gradient_checkpointing = False
         self.apply(self._init_weights)
         if cfg.tie_word_embeddings:
@@ -292,8 +295,17 @@ class KimiK3Model(nn.Module):
         mode: str = "chunk",
         cache: AttentionCache | None = None,
         use_cache: bool = False,
-    ) -> tuple[torch.Tensor, AttentionCache | None]:
-        """tokens (B, T) → (logits (B, T, vocab), AttentionCache | None)."""
+        return_mtp: bool = False,
+    ) -> (
+        tuple[torch.Tensor, AttentionCache | None]
+        | tuple[torch.Tensor, list[torch.Tensor], AttentionCache | None]
+    ):
+        """tokens (B, T) → (logits (B, T, vocab), AttentionCache | None).
+
+        With return_mtp=True (chunk mode only), returns
+        (logits, mtp_logits, cache) where mtp_logits is a list of D auxiliary
+        logit tensors from the Multi-Token Prediction heads (empty if disabled).
+        """
         self._validate_tokens(tokens)
         prefix_len = self._validate_cache(
             cache,
@@ -334,6 +346,15 @@ class KimiK3Model(nn.Module):
 
         x = self.norm(x)
         logits = self.lm_head(x)
+        if return_mtp:
+            if mode != "chunk":
+                raise ValueError("return_mtp is only supported in mode='chunk'")
+            mtp_logits = (
+                self.mtp(x, tokens, self.embed_tokens, self.lm_head)
+                if self.mtp is not None
+                else []
+            )
+            return logits, mtp_logits, new_cache
         return logits, new_cache
 
     def _select_next(

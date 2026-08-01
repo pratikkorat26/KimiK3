@@ -22,7 +22,8 @@ from ..config import ModelConfig
 from ..data.text_dataset import PackedTextDataset, batch_iterator
 from ..model import KimiK3Model
 from .config import TrainConfig
-from .loss import causal_lm_loss, perplexity
+from .loss import causal_lm_loss, mtp_loss, perplexity
+from .muon import build_muon_optimizer
 
 
 def resolve_device(name: str) -> torch.device:
@@ -55,14 +56,29 @@ class Trainer:
         self.model = model.to(self.device)
         self.step = 0
 
-        # Weight decay on matrices only (not norms/biases/1-D params).
+        self.optimizer = self._build_optimizer(model)
+
+    def _build_optimizer(self, model: KimiK3Model) -> torch.optim.Optimizer:
+        cfg = self.cfg
+        if cfg.optimizer == "muon":
+            # Per-Head Muon on hidden matmuls + AdamW on embeddings/head/norms.
+            return build_muon_optimizer(
+                model,
+                muon_lr=cfg.muon_lr,
+                adam_lr=cfg.lr,
+                momentum=cfg.muon_momentum,
+                ns_steps=cfg.muon_ns_steps,
+                betas=(cfg.beta1, cfg.beta2),
+                weight_decay=cfg.weight_decay,
+            )
+        # AdamW: weight decay on matrices only (not norms/biases/1-D params).
         decay: list[torch.nn.Parameter] = []
         no_decay: list[torch.nn.Parameter] = []
         for p in model.parameters():
             if not p.requires_grad:
                 continue
             (decay if p.ndim >= 2 else no_decay).append(p)
-        self.optimizer = torch.optim.AdamW(
+        optimizer = torch.optim.AdamW(
             [
                 {"params": decay, "weight_decay": cfg.weight_decay},
                 {"params": no_decay, "weight_decay": 0.0},
@@ -70,29 +86,44 @@ class Trainer:
             lr=cfg.lr,
             betas=(cfg.beta1, cfg.beta2),
         )
+        # Stamp initial_lr so the schedule scales each group proportionally.
+        for group in optimizer.param_groups:
+            group["initial_lr"] = cfg.lr
+        return optimizer
 
     # --- LR schedule ----------------------------------------------------
-    def _lr_at(self, step: int) -> float:
+    def _lr_multiplier(self, step: int) -> float:
+        """Warmup→cosine factor in [0.1, 1] applied to each group's initial_lr."""
         cfg = self.cfg
         if cfg.warmup_steps > 0 and step < cfg.warmup_steps:
-            return cfg.lr * (step + 1) / cfg.warmup_steps
+            return (step + 1) / cfg.warmup_steps
         progress = (step - cfg.warmup_steps) / max(1, cfg.max_steps - cfg.warmup_steps)
         progress = min(max(progress, 0.0), 1.0)
-        return cfg.lr * (0.1 + 0.9 * 0.5 * (1.0 + math.cos(math.pi * progress)))
+        return 0.1 + 0.9 * 0.5 * (1.0 + math.cos(math.pi * progress))
+
+    def _lr_at(self, step: int) -> float:
+        """Effective AdamW LR (for logging); Muon groups scale from muon_lr."""
+        return self.cfg.lr * self._lr_multiplier(step)
 
     def _apply_lr(self, step: int) -> float:
-        lr = self._lr_at(step)
+        mult = self._lr_multiplier(step)
         for group in self.optimizer.param_groups:
-            group["lr"] = lr
-        return lr
+            group["lr"] = group["initial_lr"] * mult
+        return self._lr_at(step)
 
     # --- one optimization step -----------------------------------------
     def train_step(self, x: Tensor, y: Tensor) -> float:
         self.model.train()
         x, y = x.to(self.device), y.to(self.device)
         self._apply_lr(self.step)
-        logits, _ = self.model(x, mode="chunk")
-        loss = causal_lm_loss(logits, y)
+        if self.model_cfg.num_nextn_predict_layers > 0:
+            logits, mtp_logits, _ = self.model(x, mode="chunk", return_mtp=True)
+            loss = causal_lm_loss(logits, y) + mtp_loss(
+                mtp_logits, y, self.model_cfg.mtp_loss_weight
+            )
+        else:
+            logits, _ = self.model(x, mode="chunk")
+            loss = causal_lm_loss(logits, y)
         self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.grad_clip)

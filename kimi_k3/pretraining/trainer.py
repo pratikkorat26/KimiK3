@@ -11,6 +11,7 @@ from transformers import Trainer, TrainingArguments
 
 from ..config import ModelConfig
 from ..hf import KimiK3ForCausalLM, KimiK3HFConfig
+from ..training.muon import build_muon_optimizer
 from .callbacks import (
     ElapsedTimeLimitCallback,
     LocalMetricsCallback,
@@ -67,21 +68,33 @@ def build_optimizer_and_scheduler(
     model: torch.nn.Module,
     config: PretrainingConfig,
 ) -> tuple[torch.optim.Optimizer, LambdaLR]:
-    decay: list[torch.nn.Parameter] = []
-    no_decay: list[torch.nn.Parameter] = []
-    for parameter in model.parameters():
-        if not parameter.requires_grad:
-            continue
-        (decay if parameter.ndim >= 2 else no_decay).append(parameter)
-    optimizer = torch.optim.AdamW(
-        [
-            {"params": decay, "weight_decay": config.optimizer.weight_decay},
-            {"params": no_decay, "weight_decay": 0.0},
-        ],
-        lr=config.optimizer.learning_rate,
-        betas=(config.optimizer.beta1, config.optimizer.beta2),
-        fused=torch.cuda.is_available(),
-    )
+    if config.optimizer.name == "muon":
+        # Per-Head Muon on hidden matmuls + AdamW on embeddings/head/norms.
+        optimizer: torch.optim.Optimizer = build_muon_optimizer(
+            model,
+            muon_lr=config.optimizer.muon_learning_rate,
+            adam_lr=config.optimizer.learning_rate,
+            momentum=config.optimizer.muon_momentum,
+            ns_steps=config.optimizer.muon_ns_steps,
+            betas=(config.optimizer.beta1, config.optimizer.beta2),
+            weight_decay=config.optimizer.weight_decay,
+        )
+    else:
+        decay: list[torch.nn.Parameter] = []
+        no_decay: list[torch.nn.Parameter] = []
+        for parameter in model.parameters():
+            if not parameter.requires_grad:
+                continue
+            (decay if parameter.ndim >= 2 else no_decay).append(parameter)
+        optimizer = torch.optim.AdamW(
+            [
+                {"params": decay, "weight_decay": config.optimizer.weight_decay},
+                {"params": no_decay, "weight_decay": 0.0},
+            ],
+            lr=config.optimizer.learning_rate,
+            betas=(config.optimizer.beta1, config.optimizer.beta2),
+            fused=torch.cuda.is_available(),
+        )
     total_steps = total_optimizer_steps(config)
     warmup_steps = max(1, int(total_steps * config.optimizer.warmup_ratio))
     floor = config.optimizer.final_learning_rate / config.optimizer.learning_rate

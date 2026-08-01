@@ -145,6 +145,10 @@ class ModelConfig:
     # --- Block AttnRes ---
     attn_res_block_size: int = 12
 
+    # --- MTP heads (Multi-Token Prediction; DeepSeek/K2/K3 num_nextn_predict_layers) ---
+    num_nextn_predict_layers: int = 0   # D — sequential next-n-predict heads; 0 disables MTP
+    mtp_loss_weight: float = 0.0        # λ — aux-loss scale, applied at loss time
+
     # --- study / interim switches ---
     use_interim_ffn: bool = False
     use_interim_residual: bool = False
@@ -196,6 +200,23 @@ class ModelConfig:
             raise ValueError(
                 "n_experts_per_tok cannot exceed n_experts "
                 f"({self.n_experts_per_tok} > {self.n_experts})"
+            )
+        if (
+            not isinstance(self.num_nextn_predict_layers, int)
+            or isinstance(self.num_nextn_predict_layers, bool)
+            or self.num_nextn_predict_layers < 0
+        ):
+            raise ValueError(
+                "num_nextn_predict_layers must be a non-negative integer, "
+                f"got {self.num_nextn_predict_layers!r}"
+            )
+        if (
+            not isinstance(self.mtp_loss_weight, (int, float))
+            or isinstance(self.mtp_loss_weight, bool)
+            or self.mtp_loss_weight < 0
+        ):
+            raise ValueError(
+                f"mtp_loss_weight must be a non-negative number, got {self.mtp_loss_weight!r}"
             )
 
         positive_floats = (
