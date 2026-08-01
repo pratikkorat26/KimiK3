@@ -23,8 +23,19 @@ extendable to 256K**.
 - **Training** (`kimi_k3/training/`): ✅ cross-entropy loss, `TrainConfig`, AdamW `Trainer`
   (warmup+cosine, grad-clip, checkpointing, overfit helper). Validated end-to-end: the
   overfit gate drives loss → ~0, and `scripts/train.py` learns on the tiny corpus.
-- **Still open**: Per-Head Muon optimizer; MTP heads; throughput (fused KDA / batched MoE)
-  before any longer run.
+- **Per-Head Muon** ✅ (`kimi_k3/training/muon.py`): a hybrid optimizer — quintic
+  Newton–Schulz orthogonalization applied *per head* to the fused attention
+  projections (and whole-matrix to MoE/FFN weights), with AdamW on embeddings /
+  lm_head / norms / router. Opt-in via `TrainConfig.optimizer="muon"` (and the
+  pretraining `OptimizerConfig.name`); AdamW stays the default. Validated by the
+  overfit gate on CPU/MPS.
+- **MTP heads** ✅ (`kimi_k3/mtp/heads.py`): sequential DeepSeek/K3-faithful
+  next-n-predict heads (config `num_nextn_predict_layers`), teacher-forced on
+  ground-truth future tokens and sharing the trunk embedding + lm_head, each
+  refined by a lightweight SiTU-GLU FFN (deviation from a full block, for
+  CPU-testability). Weighted auxiliary loss (`mtp_loss_weight`); training-only —
+  speculative decoding is deferred.
+- **Still open**: throughput (fused KDA / batched MoE) before any longer run.
 
 ## Phase 3 — 1B pretraining
 
@@ -32,7 +43,8 @@ extendable to 256K**.
 - Watch MoE load balance (Quantile Balancing bias), activation bounds (SiTU-GLU),
   and KDA state stability at long context.
 - Eval harness (perplexity + a few long-context probes). Checkpoint/resume.
-- *Optional:* Muon optimizer; MTP heads (`kimi_k3/mtp/`) for speculative decode.
+- Per-Head Muon and MTP heads are implemented (see Phase 2); MTP's
+  speculative-decode use in `generate()` remains optional/deferred.
 
 ## Phase 4 — 256K extension + agentic fine-tuning
 

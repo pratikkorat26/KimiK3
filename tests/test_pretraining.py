@@ -105,6 +105,24 @@ def test_scheduler_warms_up_and_reaches_floor():
     )
 
 
+def test_muon_optimizer_path_builds_hybrid_optimizer():
+    import dataclasses
+
+    from kimi_k3.training.muon import Muon
+
+    config = PretrainingConfig.from_yaml("configs/pretrain_100m.yaml")
+    muon_config = dataclasses.replace(
+        config, optimizer=dataclasses.replace(config.optimizer, name="muon")
+    )
+    model = torch.nn.Sequential(torch.nn.Linear(4, 4), torch.nn.LayerNorm(4))
+    optimizer, scheduler = build_optimizer_and_scheduler(model, muon_config)
+    assert isinstance(optimizer, Muon)
+    # Muon group (the Linear weight) and AdamW group (norm/bias) both scheduled.
+    use_muon = {group["use_muon"] for group in optimizer.param_groups}
+    assert use_muon == {True, False}
+    assert len(scheduler.get_last_lr()) == len(optimizer.param_groups)
+
+
 def test_training_arguments_enable_monitoring_and_checkpointing(tmp_path):
     config = PretrainingConfig.from_yaml("configs/pretrain_100m.yaml")
     arguments = build_training_arguments(

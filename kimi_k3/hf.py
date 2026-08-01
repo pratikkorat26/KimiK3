@@ -115,11 +115,19 @@ class KimiK3ForCausalLM(PreTrainedModel):
         if use_cache and self.training:
             raise ValueError("use_cache must be false during training")
 
-        logits, _ = self.model(
-            input_ids,
-            mode="chunk",
-            use_cache=bool(use_cache),
+        want_mtp = (
+            self.training and self.model.cfg.num_nextn_predict_layers > 0
         )
+        if want_mtp:
+            logits, mtp_logits, _ = self.model(
+                input_ids, mode="chunk", use_cache=bool(use_cache), return_mtp=True
+            )
+        else:
+            logits, _ = self.model(
+                input_ids,
+                mode="chunk",
+                use_cache=bool(use_cache),
+            )
         loss = None
         if labels is not None:
             if labels.shape != input_ids.shape:
@@ -127,11 +135,31 @@ class KimiK3ForCausalLM(PreTrainedModel):
                     "labels must have the same shape as input_ids, "
                     f"got {tuple(labels.shape)} and {tuple(input_ids.shape)}"
                 )
+            vocab = logits.shape[-1]
             loss = F.cross_entropy(
-                logits[:, :-1].float().reshape(-1, logits.shape[-1]),
+                logits[:, :-1].float().reshape(-1, vocab),
                 labels[:, 1:].reshape(-1),
                 ignore_index=-100,
             )
+            if want_mtp:
+                # Main head predicts labels[:, 1:] from logits[:, :-1]; MTP head j
+                # predicts a further j-shifted target: labels[:, 1+j:] from
+                # mtp_logits[j-1][:, : T-1-j].
+                weight = self.model.cfg.mtp_loss_weight
+                depth = len(mtp_logits)
+                if weight != 0.0 and depth > 0:
+                    mtp_total = logits.new_zeros(())
+                    for j, logits_j in enumerate(mtp_logits, start=1):
+                        if labels.shape[1] <= 1 + j:
+                            continue
+                        mtp_total = mtp_total + F.cross_entropy(
+                            logits_j[:, : labels.shape[1] - 1 - j]
+                            .float()
+                            .reshape(-1, vocab),
+                            labels[:, 1 + j :].reshape(-1),
+                            ignore_index=-100,
+                        )
+                    loss = loss + (weight / depth) * mtp_total
 
         if return_dict is False:
             return ((loss, logits) if loss is not None else (logits,))

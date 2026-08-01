@@ -5,12 +5,12 @@ Trains tiny_hybrid on a single fixed batch and prints the loss collapsing toward
 zero. If this does NOT drop, something in the forward/backward/optimizer path is
 broken — it is the fastest end-to-end correctness check.
 
-    python scripts/overfit.py [steps]
+    python scripts/overfit.py [steps] [--optimizer {adamw,muon}]
 """
 
 from __future__ import annotations
 
-import sys
+import argparse
 from dataclasses import replace
 
 import torch
@@ -22,7 +22,11 @@ from kimi_k3.training import TrainConfig, Trainer
 
 
 def main() -> None:
-    steps = int(sys.argv[1]) if len(sys.argv) > 1 else 200
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("steps", nargs="?", type=int, default=200)
+    parser.add_argument("--optimizer", choices=("adamw", "muon"), default="adamw")
+    args = parser.parse_args()
+    steps = args.steps
     torch.manual_seed(0)
 
     tok = ByteTokenizer()
@@ -33,7 +37,13 @@ def main() -> None:
     ds = build_dataset(TINY_CORPUS, tok, seq_len=seq_len)
     x, y = next(batch_iterator(ds, batch_size=4, shuffle=False))
 
-    tc = TrainConfig(max_steps=steps, warmup_steps=max(1, steps // 10), lr=3e-3, device="cpu")
+    tc = TrainConfig(
+        max_steps=steps,
+        warmup_steps=max(1, steps // 10),
+        lr=3e-3,
+        device="cpu",
+        optimizer=args.optimizer,
+    )
     trainer = Trainer(model, tc)
 
     losses = trainer.overfit(x, y, steps)
