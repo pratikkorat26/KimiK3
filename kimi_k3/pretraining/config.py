@@ -33,6 +33,7 @@ class TokenizerConfig:
     vocab_size: int = 32_000
     sample_bytes: int = 100_000_000
     model_max_length: int = 4096
+    artifact_name: str = "v1"
 
 
 @dataclass(frozen=True)
@@ -54,10 +55,12 @@ class OptimizerConfig:
 class RuntimeConfig:
     seed: int = 42
     micro_batch_size: int = 1
+    effective_batch_tokens: int = 32_768
     eval_steps: int = 250
     save_steps: int = 250
     logging_steps: int = 10
     dataloader_num_workers: int = 2
+    bf16: bool = True
     max_elapsed_days: float = 30.0
     keep_last_checkpoints: int = 3
     periodic_eval_tokens_per_source: int = 131_072
@@ -68,6 +71,7 @@ class DataConfig:
     train_tokens: int = 500_000_000
     validation_tokens: int = 5_000_000
     shard_tokens: int = 10_000_000
+    artifact_name: str = "tokenized-v1"
     sources: tuple[SourceConfig, ...] = field(default_factory=tuple)
 
 
@@ -112,27 +116,90 @@ class PretrainingConfig:
         return config
 
     def validate(self) -> None:
-        if self.model_preset != "small":
-            raise ValueError("local pretraining currently supports model_preset='small'")
+        if self.model_preset not in {"small", "tiny_hybrid"}:
+            raise ValueError(
+                "local pretraining supports model_preset='small' or "
+                "'tiny_hybrid'"
+            )
+        if self.optimizer.name not in {"adamw", "muon"}:
+            raise ValueError("optimizer.name must be 'adamw' or 'muon'")
+        for optimizer_label, optimizer_value in (
+            ("optimizer.learning_rate", self.optimizer.learning_rate),
+            ("optimizer.final_learning_rate", self.optimizer.final_learning_rate),
+            ("optimizer.muon_learning_rate", self.optimizer.muon_learning_rate),
+            ("optimizer.max_grad_norm", self.optimizer.max_grad_norm),
+        ):
+            if optimizer_value <= 0:
+                raise ValueError(f"{optimizer_label} must be positive")
+        if not 0.0 <= self.optimizer.warmup_ratio <= 1.0:
+            raise ValueError("optimizer.warmup_ratio must be in [0, 1]")
+        if self.optimizer.weight_decay < 0:
+            raise ValueError("optimizer.weight_decay must be non-negative")
+        if not 0.0 <= self.optimizer.muon_momentum < 1.0:
+            raise ValueError("optimizer.muon_momentum must be in [0, 1)")
+        if self.optimizer.muon_ns_steps <= 0:
+            raise ValueError("optimizer.muon_ns_steps must be positive")
         if self.tokenizer.vocab_size < 256:
             raise ValueError("tokenizer vocab_size must be at least 256")
+        if self.tokenizer.sample_bytes <= 0:
+            raise ValueError("tokenizer.sample_bytes must be positive")
+        if self.tokenizer.model_max_length <= 0:
+            raise ValueError("tokenizer.model_max_length must be positive")
+        for artifact_label, artifact_name in (
+            ("tokenizer.artifact_name", self.tokenizer.artifact_name),
+            ("data.artifact_name", self.data.artifact_name),
+        ):
+            if (
+                not artifact_name
+                or Path(artifact_name).name != artifact_name
+                or artifact_name in {".", ".."}
+            ):
+                raise ValueError(
+                    f"{artifact_label} must be a single directory name"
+                )
         if not self.data.sources:
             raise ValueError("at least one data source is required")
+        if len({source.name for source in self.data.sources}) != len(
+            self.data.sources
+        ):
+            raise ValueError("source names must be unique")
+        if any(source.weight <= 0 for source in self.data.sources):
+            raise ValueError("source weights must be positive")
+        for numeric_label, numeric_value in (
+            ("data.train_tokens", self.data.train_tokens),
+            ("data.validation_tokens", self.data.validation_tokens),
+            ("data.shard_tokens", self.data.shard_tokens),
+            ("runtime.micro_batch_size", self.runtime.micro_batch_size),
+            (
+                "runtime.effective_batch_tokens",
+                self.runtime.effective_batch_tokens,
+            ),
+        ):
+            if numeric_value <= 0:
+                raise ValueError(f"{numeric_label} must be positive")
         weight = sum(source.weight for source in self.data.sources)
         if abs(weight - 1.0) > 1e-9:
             raise ValueError(f"source weights must sum to 1.0, got {weight}")
         if sum(stage.tokens for stage in self.curriculum) != self.data.train_tokens:
             raise ValueError("curriculum tokens must equal data.train_tokens")
         for stage in self.curriculum:
+            if (
+                stage.tokens <= 0
+                or stage.sequence_length <= 0
+                or stage.gradient_accumulation_steps <= 0
+            ):
+                raise ValueError(
+                    f"curriculum stage {stage.name!r} values must be positive"
+                )
             effective = (
                 self.runtime.micro_batch_size
                 * stage.sequence_length
                 * stage.gradient_accumulation_steps
             )
-            if effective != 32_768:
+            if effective != self.runtime.effective_batch_tokens:
                 raise ValueError(
-                    f"stage {stage.name!r} effective batch must be 32768 tokens, "
-                    f"got {effective}"
+                    f"stage {stage.name!r} effective batch must be "
+                    f"{self.runtime.effective_batch_tokens} tokens, got {effective}"
                 )
 
     def stage_source_tokens(self, stage_index: int, source_index: int) -> int:

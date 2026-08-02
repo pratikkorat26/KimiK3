@@ -17,7 +17,7 @@ flagship's size, vision, quantization, or training infrastructure.
 | Vocab | 163,840 | 65,536 |
 | Vision | MoonViT-V2 (native) | out of scope |
 | Quantization | MXFP4 weights / MXFP8 acts, QAT | out of scope (fp32/bf16) |
-| Optimizer | (per-head) Muon | out of scope (roadmap) |
+| Optimizer | (per-head) Muon | implemented, opt-in |
 
 ## Core architecture ingredients
 
@@ -28,8 +28,9 @@ flagship's size, vision, quantization, or training infrastructure.
 - **Attention Residuals** — depth-wise mix letting a layer read earlier layers.
 - **Stable LatentMoE** — sigmoid router, grouped top-k, shared experts,
   **SiTU-GLU** activation, **Quantile Balancing** (aux-loss-free load balancing).
-- **MTP** — extra next-n-predict heads (deferred; `kimi_k3/mtp/`).
-- Flagship-only: MoonViT-V2 vision, MXFP4/8 QAT, Muon, multi-teacher distillation.
+- **MTP** — opt-in sequential next-n-predict auxiliary heads; speculative
+  decoding remains deferred.
+- Flagship-only: MoonViT-V2 vision, MXFP4/8 QAT, and multi-teacher distillation.
 
 ## Why NoPE matters for our context goal
 

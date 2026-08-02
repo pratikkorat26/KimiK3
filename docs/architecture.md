@@ -2,8 +2,9 @@
 
 This document describes the architecture as implemented in `kimi_k3/`, and why
 each piece is shaped the way it is. It is a **study reference**: readable math
-over production kernels. The forward/decode path is complete and test-verified;
-training is not implemented yet (see [roadmap.md](roadmap.md)).
+over production kernels. The forward/decode path and tiny Hugging Face
+checkpoint/resume integration are test-verified. The real 111M CUDA pilot is
+still pending (see [verification.md](verification.md)).
 
 ## The stack, top to bottom
 
@@ -91,10 +92,9 @@ ablation switch).
 
 ## What's out of scope (vs. the 2.8T flagship)
 
-Native vision (MoonViT-V2), MXFP4/MXFP8 quantization + QAT, the Muon optimizer,
-and multi-teacher distillation are **not** implemented — they are irrelevant to a
-1B study model. MTP heads are a documented stub (`kimi_k3/mtp/`), deferred until
-training exists.
+Native vision (MoonViT-V2), MXFP4/MXFP8 quantization + QAT, multi-teacher
+distillation, and MTP speculative decoding are **not** implemented. Per-Head
+Muon and training-time MTP auxiliary heads are implemented as opt-in features.
 
 ## Verification status (against primary sources)
 

@@ -1,11 +1,11 @@
 """
-kimi_k3/training/trainer.py — minimal AdamW trainer for KimiK3Model.
+kimi_k3/training/trainer.py — minimal AdamW/Muon trainer for KimiK3Model.
 
 Scope (Phase 2): correctness over throughput. Runs on CPU (default) or an
 explicitly-requested MPS/CUDA device. Training uses the parallel chunk path
 (mode="chunk"); the Quantile-Balancing router bias update fires automatically
-under model.train(). Optimizer is AdamW — Per-Head Muon (K3's optimizer) is a
-later study item.
+under model.train(). AdamW is the default; Per-Head Muon is available as an
+opt-in hybrid optimizer.
 """
 
 from __future__ import annotations

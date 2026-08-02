@@ -1,18 +1,18 @@
-artifact_root: .artifacts
-run_name: kimi-k3-100m-pretrain
+artifact_root: .artifacts/smoke
+run_name: kimi-k3-100m-smoke
 model_preset: small
 
 tokenizer:
-  vocab_size: 32000
-  sample_bytes: 100000000
-  model_max_length: 4096
-  artifact_name: v1
+  vocab_size: 8192
+  sample_bytes: 1000000
+  model_max_length: 512
+  artifact_name: smoke-v1
 
 data:
-  train_tokens: 500006912
-  validation_tokens: 5000000
-  shard_tokens: 10000000
-  artifact_name: tokenized-v1
+  train_tokens: 1048576
+  validation_tokens: 49152
+  shard_tokens: 262144
+  artifact_name: smoke-v1
   sources:
     - name: english
       dataset: HuggingFaceTB/smollm-corpus
@@ -40,7 +40,7 @@ optimizer:
   name: adamw
   learning_rate: 0.0003
   final_learning_rate: 0.00003
-  warmup_ratio: 0.01
+  warmup_ratio: 0.1
   weight_decay: 0.1
   beta1: 0.9
   beta2: 0.95
@@ -49,26 +49,18 @@ optimizer:
 runtime:
   seed: 42
   micro_batch_size: 1
-  effective_batch_tokens: 32768
-  eval_steps: 250
-  save_steps: 250
-  logging_steps: 10
+  effective_batch_tokens: 8192
+  eval_steps: 10
+  save_steps: 10
+  logging_steps: 1
   dataloader_num_workers: 2
   bf16: true
-  max_elapsed_days: 30.0
-  keep_last_checkpoints: 3
-  periodic_eval_tokens_per_source: 131072
+  max_elapsed_days: 1.0
+  keep_last_checkpoints: 2
+  periodic_eval_tokens_per_source: 8192
 
 curriculum:
-  - name: context-512
-    tokens: 349995008
+  - name: smoke-context-512
+    tokens: 1048576
     sequence_length: 512
-    gradient_accumulation_steps: 64
-  - name: context-1024
-    tokens: 100007936
-    sequence_length: 1024
-    gradient_accumulation_steps: 32
-  - name: context-2048
-    tokens: 50003968
-    sequence_length: 2048
     gradient_accumulation_steps: 16

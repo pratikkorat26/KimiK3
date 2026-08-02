@@ -5,9 +5,10 @@ architecture**, built for study. The goal is to understand the model, then train
 a small **~1B-total-param MoE** for agentic / browser-use-with-tools work at
 **64K context (extendable to 256K)**.
 
-This is an **architecture reference**: the forward and decode paths are complete
-and verified; the tokenizer, data pipeline, and training loop are on the
-[roadmap](docs/roadmap.md), not yet built.
+This is an **architecture and local-training reference**: forward, decode,
+tokenization, deterministic token shards, and Hugging Face training integration
+are implemented. A real 111M CUDA pilot remains an explicit verification gate;
+see [the verification ledger](docs/verification.md).
 
 ## What's implemented
 
@@ -18,9 +19,12 @@ and verified; the tokenizer, data pipeline, and training loop are on the
 | **Hybrid schedule** | `kimi_k3/config.py` | 3 KDA : 1 Gated MLA, final layer MLA |
 | **Attention Residuals** | `kimi_k3/residuals/` | depth-wise mix over blocks |
 | **Stable LatentMoE** | `kimi_k3/moe/` | SiTU-GLU experts + Quantile-Balancing router |
+| **MTP heads** | `kimi_k3/mtp/` | opt-in sequential next-token auxiliary heads for training |
+| **Per-Head Muon** | `kimi_k3/training/muon.py` | opt-in hybrid Muon + AdamW optimizer |
 | **Decode caches, sampling** | `kimi_k3/attention/cache.py`, `model.py` | KDA/MLA caches; greedy + top-k/top-p |
 
-Deferred (stubs in the tree): `vision/`, `mtp/`, `tokenizer/`, `data/`, `training/`.
+Deferred: native vision, MTP speculative decoding, quantization, multi-teacher
+distillation, and production fused kernels.
 
 > **Positional encoding: NoPE by design.** KDA supplies position implicitly, so
 > the MLA layers use no RoPE either — this is faithful to Kimi K3 and is why

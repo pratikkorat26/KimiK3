@@ -25,8 +25,8 @@ def main() -> None:
     args = parser.parse_args()
     config = PretrainingConfig.from_yaml(args.config)
     paths = configure_local_artifacts(config.artifact_root)
-    tokenizer_dir = paths.tokenizer / "v1"
-    shard_dir = paths.data / "tokenized-v1"
+    tokenizer_dir = paths.tokenizer / config.tokenizer.artifact_name
+    shard_dir = paths.data / config.data.artifact_name
 
     if not args.confirm_download:
         raise SystemExit(
@@ -40,16 +40,25 @@ def main() -> None:
     if args.step in ("shards", "all"):
         if not (tokenizer_dir / "tokenizer.json").exists():
             raise SystemExit(f"tokenizer is missing: {tokenizer_dir}")
-        from kimi_k3.pretraining.data import prepare_token_shards
+        from kimi_k3.pretraining.data import (
+            prepare_token_shards,
+            validate_prepared_artifacts,
+        )
 
         manifest = prepare_token_shards(
             config,
             tokenizer_dir=tokenizer_dir,
             output_dir=shard_dir,
         )
+        validation = validate_prepared_artifacts(
+            config,
+            tokenizer_dir=tokenizer_dir,
+            manifest_path=shard_dir / "manifest.json",
+        )
         print(
             f"shards: {shard_dir} "
-            f"({manifest['train_tokens']:,} train tokens)"
+            f"({manifest['train_tokens']:,} train tokens, "
+            f"{validation['total_shards']} verified shards)"
         )
 
 

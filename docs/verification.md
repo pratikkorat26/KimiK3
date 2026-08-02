@@ -17,7 +17,7 @@ Last updated: **2026-07-30**
 
 ### Automated suite
 
-The full suite completed with **115 passed and 1 skipped** out of 116 collected
+The complete suite completed with **144 passed and 1 skipped** out of 145 collected
 tests. The skipped test was the MPS smoke test because MPS is unavailable in
 the WSL/CUDA environment.
 
@@ -31,12 +31,13 @@ the WSL/CUDA environment.
 | Basic training | Causal language-model loss, fixed-batch overfitting, optimizer flow, and checkpoint save/load |
 | Tokenizers and data | Byte-tokenizer round trips, tokenizer protocol behavior, sequence packing, labels, and batch shapes |
 | Hugging Face adapter | Shifted-label loss, packed-mask enforcement, checkpointing hooks, safetensors save/load, and regular versus checkpointed output/gradient agreement |
-| Pretraining pipeline | Token accounting, curriculum boundaries, project-local artifact paths, memory-mapped shard ranges, scheduler warmup/floor, BF16/checkpoint/logging arguments |
+| Pretraining pipeline | Token accounting, curriculum boundaries, isolated artifact paths, memory-mapped shard ranges, manifest corruption detection, scheduler warmup/floor, Trainer checkpoint/resume, and checkpoint pruning |
+| Muon and MTP | Parameter partitioning, Newton–Schulz updates, optimizer state, sequential MTP heads, auxiliary loss, gradients, and composed overfit paths |
 
 Static checks also completed successfully:
 
 - `ruff check .`
-- `mypy kimi_k3` across 37 source files
+- `mypy kimi_k3` across 39 source files
 
 ### Inspected checks
 
@@ -77,7 +78,8 @@ These items must remain unchecked until their commands have run successfully:
 - [ ] Create all 500M training-token and 5M validation-token shards.
 - [ ] Audit the generated manifest, checksums, provenance, source revisions,
       licenses, document counts, and token counts.
-- [ ] Complete a real Hugging Face `Trainer.train()` optimizer step.
+- [x] Complete a real Hugging Face `Trainer.train()` optimizer step on the tiny
+      integration model.
 - [ ] Complete the 111M-parameter CUDA pilot and inspect loss, gradients,
       throughput, memory use, and router load.
 - [ ] Confirm TensorBoard event creation and live terminal monitoring.
@@ -163,20 +165,9 @@ weights.
      --watch 10
    ```
 
-5. Test checkpoint resume separately. The 10-step pilot above does not reach
-   the configured 250-step checkpoint interval, so it cannot validate resume.
-   First run a 250-step pilot:
-
-   ```bash
-   python scripts/train_pretraining.py \
-     --config configs/pretrain_100m.yaml \
-     --stage 0 \
-     --pilot-steps 250
-   ```
-
-   Confirm that
-   `.artifacts/runs/kimi-k3-100m-pretrain-pilot/checkpoint-250/` exists. Then
-   run 10 more steps:
+5. Rerun the 10-step pilot to validate resume. The stage-boundary callback
+   saves `checkpoint-10` even though periodic checkpoints use a 250-step
+   interval:
 
    ```bash
    python scripts/train_pretraining.py \
@@ -185,8 +176,9 @@ weights.
      --pilot-steps 10
    ```
 
-   Confirm that the second command loads `checkpoint-250` and finishes at
-   global step 260 rather than restarting at zero.
+   Confirm that the second invocation loads `checkpoint-10` and finishes at
+   global step 20 rather than restarting at zero. A 250-step pilot is still
+   required to exercise scheduled evaluation under production settings.
 
 Full training should start only after the pilot and resume checks pass. Its
 command and operating procedure are in [pretraining.md](pretraining.md).
