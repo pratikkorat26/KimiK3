@@ -13,13 +13,12 @@ extendable to 256K**.
 - File-based configs (`configs/*.yaml`), docs, dev tooling (ruff/mypy/CI),
   hot-path type hints, removed dead code.
 
-## Phase 2 — Minimal trainability ✅ (in progress)
+## Phase 2 — Minimal trainability ✅
 
-- **Tokenizer** (`kimi_k3/tokenizer/`): ✅ `ByteTokenizer` (zero-dep) + `TiktokenTokenizer`
-  (GPT-2 BPE) behind a shared protocol. Training our own BPE for the 65,536 vocab is
-  still future work.
-- **Data** (`kimi_k3/data/`): ✅ fixed-length causal-LM packing + bundled tiny corpus.
-  The progressive-length sampler (8K → 64K → 256K) remains a stub.
+- **Tokenizer**: byte/tiktoken study adapters plus a deterministic trainable
+  byte-level BPE for the local campaign.
+- **Data**: fixed-length study packing plus streamed, revision-pinned,
+  checksummed token shards with per-document provenance.
 - **Training** (`kimi_k3/training/`): ✅ cross-entropy loss, `TrainConfig`, AdamW `Trainer`
   (warmup+cosine, grad-clip, checkpointing, overfit helper). Validated end-to-end: the
   overfit gate drives loss → ~0, and `scripts/train.py` learns on the tiny corpus.
@@ -35,9 +34,21 @@ extendable to 256K**.
   refined by a lightweight SiTU-GLU FFN (deviation from a full block, for
   CPU-testability). Weighted auxiliary loss (`mtp_loss_weight`); training-only —
   speculative decoding is deferred.
+- **Hugging Face integration**: staged curriculum, activation checkpointing,
+  AdamW/Muon warmup-cosine scheduling, local metrics, evaluation, and resumable
+  checkpoints. Tiny-model checkpoint/resume is automated; the 111M CUDA pilot
+  remains open.
 - **Still open**: throughput (fused KDA / batched MoE) before any longer run.
 
-## Phase 3 — 1B pretraining
+## Phase 3 — 100M pretraining readiness
+
+- Run the isolated 1M-token smoke campaign, including validation and resume.
+- Prepare and audit the production tokenizer, shards, checksums, provenance,
+  and decoded samples.
+- Run a representative 250-step pilot and use measured throughput to decide
+  whether the 500M-token campaign is practical on the local GPU.
+
+## Phase 4 — 1B pretraining
 
 - Pretrain `kimi_1b_64k` with the progressive-length curriculum **8K → 64K**.
 - Watch MoE load balance (Quantile Balancing bias), activation bounds (SiTU-GLU),
@@ -46,7 +57,7 @@ extendable to 256K**.
 - Per-Head Muon and MTP heads are implemented (see Phase 2); MTP's
   speculative-decode use in `generate()` remains optional/deferred.
 
-## Phase 4 — 256K extension + agentic fine-tuning
+## Phase 5 — 256K extension + agentic fine-tuning
 
 - Extend to **256K** via a long-context curriculum + synthetic long-context data
   that genuinely requires attending across the window. **No RoPE knob** — this is

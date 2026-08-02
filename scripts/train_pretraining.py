@@ -43,8 +43,8 @@ def main() -> None:
 
     config = PretrainingConfig.from_yaml(args.config)
     paths = configure_local_artifacts(config.artifact_root)
-    tokenizer_dir = paths.tokenizer / "v1"
-    manifest_path = paths.data / "tokenized-v1" / "manifest.json"
+    tokenizer_dir = paths.tokenizer / config.tokenizer.artifact_name
+    manifest_path = paths.data / config.data.artifact_name / "manifest.json"
     selected_run_name = (
         f"{config.run_name}-pilot"
         if args.pilot_steps is not None
@@ -61,11 +61,22 @@ def main() -> None:
         raise SystemExit("full training requires --confirm-full-run")
 
     from kimi_k3.pretraining.callbacks import prune_checkpoints
+    from kimi_k3.pretraining.data import validate_prepared_artifacts
     from kimi_k3.pretraining.trainer import (
         build_stage_trainer,
         stage_end_step,
         total_optimizer_steps,
     )
+
+    try:
+        validate_prepared_artifacts(
+            config,
+            tokenizer_dir=tokenizer_dir,
+            manifest_path=manifest_path,
+            verify_checksums=False,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        raise SystemExit(f"prepared artifact validation failed: {exc}") from exc
 
     resume = Path(args.resume_from).resolve() if args.resume_from else _latest_checkpoint(run_dir)
     if resume is not None and not resume.exists():

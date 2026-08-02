@@ -51,9 +51,16 @@ def stage_end_step(config: PretrainingConfig, stage_index: int) -> int:
 
 
 def build_model(config: PretrainingConfig, tokenizer) -> KimiK3ForCausalLM:
-    if config.model_preset != "small":
-        raise ValueError(f"unsupported model preset {config.model_preset!r}")
-    core = ModelConfig.small()
+    presets = {
+        "small": ModelConfig.small,
+        "tiny_hybrid": ModelConfig.tiny_hybrid,
+    }
+    try:
+        core = presets[config.model_preset]()
+    except KeyError as exc:
+        raise ValueError(
+            f"unsupported model preset {config.model_preset!r}"
+        ) from exc
     core.vocab_size = len(tokenizer)
     hf_config = KimiK3HFConfig.from_model_config(
         core,
@@ -141,7 +148,7 @@ def build_training_arguments(
         learning_rate=config.optimizer.learning_rate,
         weight_decay=config.optimizer.weight_decay,
         max_grad_norm=config.optimizer.max_grad_norm,
-        bf16=True,
+        bf16=config.runtime.bf16,
         fp16=False,
         gradient_checkpointing=True,
         dataloader_num_workers=config.runtime.dataloader_num_workers,

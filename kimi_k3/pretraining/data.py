@@ -274,6 +274,145 @@ def prepare_token_shards(
     return manifest
 
 
+def _stored_path(manifest_path: Path, value: str) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else manifest_path.parent / path
+
+
+def validate_prepared_artifacts(
+    config: PretrainingConfig,
+    *,
+    tokenizer_dir: str | Path,
+    manifest_path: str | Path,
+    verify_checksums: bool = True,
+) -> dict[str, Any]:
+    """Validate prepared tokenizer, shards, provenance, and campaign totals."""
+    tokenizer_dir = Path(tokenizer_dir).resolve()
+    manifest_path = Path(manifest_path).resolve()
+    tokenizer_json = tokenizer_dir / "tokenizer.json"
+    tokenizer_manifest_path = tokenizer_dir / "manifest.json"
+    for path in (tokenizer_json, tokenizer_manifest_path, manifest_path):
+        if not path.is_file():
+            raise FileNotFoundError(f"required prepared artifact is missing: {path}")
+
+    tokenizer_manifest = json.loads(
+        tokenizer_manifest_path.read_text(encoding="utf-8")
+    )
+    tokenizer_digest = _sha256(tokenizer_json)
+    if tokenizer_manifest.get("sha256") != tokenizer_digest:
+        raise ValueError("tokenizer.json checksum does not match tokenizer manifest")
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("tokenizer_sha256") != tokenizer_digest:
+        raise ValueError("data manifest was created with a different tokenizer")
+    if manifest.get("train_tokens") != config.data.train_tokens:
+        raise ValueError("data manifest train token total does not match config")
+    if manifest.get("validation_tokens") != config.data.validation_tokens:
+        raise ValueError("data manifest validation token total does not match config")
+
+    entries = {entry.get("name"): entry for entry in manifest.get("sources", [])}
+    expected_names = {source.name for source in config.data.sources}
+    if set(entries) != expected_names:
+        raise ValueError(
+            "data manifest sources do not match config: "
+            f"expected {sorted(expected_names)}, got {sorted(entries)}"
+        )
+    tokenizer_revisions = {
+        entry.get("name"): entry.get("resolved_revision")
+        for entry in tokenizer_manifest.get("sources", [])
+    }
+    if set(tokenizer_revisions) != expected_names:
+        raise ValueError("tokenizer manifest sources do not match config")
+
+    total_shards = 0
+    total_bytes = 0
+    source_summary: dict[str, Any] = {}
+    for source_index, source in enumerate(config.data.sources):
+        entry = entries[source.name]
+        if entry.get("dataset") != source.dataset:
+            raise ValueError(f"dataset mismatch for source {source.name!r}")
+        resolved_revision = entry.get("resolved_revision")
+        if resolved_revision in (None, ""):
+            raise ValueError(f"source {source.name!r} has no resolved revision")
+        if entry.get("requested_revision") != source.revision:
+            raise ValueError(f"requested revision mismatch for source {source.name!r}")
+        if tokenizer_revisions[source.name] != resolved_revision:
+            raise ValueError(
+                f"tokenizer/data revision mismatch for source {source.name!r}"
+            )
+        if entry.get("declared_license") != source.declared_license:
+            raise ValueError(f"declared license mismatch for source {source.name!r}")
+
+        split_summary: dict[str, Any] = {}
+        expected_tokens = {
+            "train": config.source_train_tokens(source_index),
+            "validation": config.source_validation_tokens(source_index),
+        }
+        for split, target in expected_tokens.items():
+            split_entry = entry.get("splits", {}).get(split)
+            if not isinstance(split_entry, dict):
+                raise ValueError(
+                    f"source {source.name!r} is missing split {split!r}"
+                )
+            if split_entry.get("tokens") != target:
+                raise ValueError(
+                    f"{source.name}/{split} token total does not match config"
+                )
+            shards = split_entry.get("shards", [])
+            if sum(item.get("tokens", 0) for item in shards) != target:
+                raise ValueError(
+                    f"{source.name}/{split} shard tokens do not match split total"
+                )
+            for shard in shards:
+                path = _stored_path(manifest_path, shard["path"])
+                if not path.is_file():
+                    raise FileNotFoundError(f"token shard is missing: {path}")
+                expected_size = int(shard["tokens"]) * np.dtype("<u2").itemsize
+                actual_size = path.stat().st_size
+                if actual_size != expected_size:
+                    raise ValueError(
+                        f"token shard size mismatch for {path}: "
+                        f"expected {expected_size}, got {actual_size}"
+                    )
+                if verify_checksums and _sha256(path) != shard.get("sha256"):
+                    raise ValueError(f"token shard checksum mismatch: {path}")
+                total_shards += 1
+                total_bytes += actual_size
+            split_summary[split] = {
+                "tokens": target,
+                "documents": split_entry.get("documents"),
+                "shards": len(shards),
+            }
+
+        provenance = entry.get("provenance", {})
+        provenance_path = _stored_path(manifest_path, provenance.get("path", ""))
+        if not provenance_path.is_file():
+            raise FileNotFoundError(
+                f"provenance ledger is missing: {provenance_path}"
+            )
+        if (
+            verify_checksums
+            and _sha256(provenance_path) != provenance.get("sha256")
+        ):
+            raise ValueError(
+                f"provenance checksum mismatch for source {source.name!r}"
+            )
+        source_summary[source.name] = {
+            "resolved_revision": entry["resolved_revision"],
+            "dataset_card_license": entry.get("dataset_card_license"),
+            "splits": split_summary,
+        }
+
+    return {
+        "valid": True,
+        "checksums_verified": verify_checksums,
+        "tokenizer_sha256": tokenizer_digest,
+        "total_shards": total_shards,
+        "total_bytes": total_bytes,
+        "sources": source_summary,
+    }
+
+
 @dataclass(frozen=True)
 class _Segment:
     path: Path
